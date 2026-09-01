@@ -14,6 +14,7 @@ SPEED_LABEL = "speed in pps: "
 class BedGui:
     def __init__(self, controller: BedController):
         self.controller = controller
+        self._move_context = None
         self._build()
 
     def _build(self):
@@ -63,18 +64,43 @@ class BedGui:
         self.position_text.value = self._bed_up_text()
 
     def _on_up(self):
+        if self.controller.is_moving:
+            return
         self.up_button.enabled = False
-        self.down_button.enabled = True
-        self.controller.move_up()
-        self._refresh_state()
-        info("Bett oben", "Sicherungsseile anbringen und Motoren ausschalten!")
+        self.down_button.enabled = False
+        self._move_context = "up"
+        self.controller.run_async(self.controller.move_up)
+        self.app.repeat(100, self._poll_movement)
 
     def _on_down(self):
-        self.up_button.enabled = True
-        self.down_button.enabled = False
+        if self.controller.is_moving:
+            return
         info("Bett herunterfahren", "Motoren einschalten und Sicherungsseile lösen!")
-        self.controller.move_down()
+        self.up_button.enabled = False
+        self.down_button.enabled = False
+        self._move_context = "down"
+        self.controller.run_async(self.controller.move_down)
+        self.app.repeat(100, self._poll_movement)
+
+    def _poll_movement(self):
+        # runs on the main thread; wait until the background move has finished
+        if self.controller.is_moving:
+            return
+        self.app.cancel(self._poll_movement)
         self._refresh_state()
+        if self._move_context == "up":
+            self.up_button.enabled = False
+            self.down_button.enabled = True
+            info("Bett oben", "Sicherungsseile anbringen und Motoren ausschalten!")
+        else:
+            self.up_button.enabled = True
+            self.down_button.enabled = False
+        self._move_context = None
+
+    def _correct(self, action):
+        if self.controller.is_moving:
+            return
+        self.controller.run_async(action)
 
     def _settings_window(self):
         window = Window(self.app, layout="grid", width="575", height="150", bg=BACKGROUND_COLOR, title="Settings")
@@ -107,16 +133,16 @@ class BedGui:
         Text(window, grid=[2, 0], text="     ")
         Text(window, grid=[3, 0], text="front correction")
         Text(window, grid=[0, 1], text="  ")
-        back_up_button = PushButton(window, grid=[1, 1], width=button_width, height=button_height, command=self.controller.correct_back_up, text="↑")
+        back_up_button = PushButton(window, grid=[1, 1], width=button_width, height=button_height, command=lambda: self._correct(self.controller.correct_back_up), text="↑")
         back_up_button.text_size = text_size
         Text(window, grid=[2, 1], text="     ")
-        front_up_button = PushButton(window, grid=[3, 1], width=button_width, height=button_height, command=self.controller.correct_front_up, text="↑")
+        front_up_button = PushButton(window, grid=[3, 1], width=button_width, height=button_height, command=lambda: self._correct(self.controller.correct_front_up), text="↑")
         front_up_button.text_size = text_size
         Text(window, grid=[0, 2], text="  ")
-        back_down_button = PushButton(window, grid=[1, 2], width=button_width, height=button_height, command=self.controller.correct_back_down, text="↓")
+        back_down_button = PushButton(window, grid=[1, 2], width=button_width, height=button_height, command=lambda: self._correct(self.controller.correct_back_down), text="↓")
         back_down_button.text_size = text_size
         Text(window, grid=[2, 2], text="     ")
-        front_down_button = PushButton(window, grid=[3, 2], width=button_width, height=button_height, command=self.controller.correct_front_down, text="↓")
+        front_down_button = PushButton(window, grid=[3, 2], width=button_width, height=button_height, command=lambda: self._correct(self.controller.correct_front_down), text="↓")
         front_down_button.text_size = text_size
 
     def _not_implemented_window(self):

@@ -5,6 +5,8 @@ guizero and RPi.GPIO are mocked in conftest.py, so these run on any machine.
 
 from unittest.mock import MagicMock, call
 
+import threading
+
 import pytest
 
 from bedliftcontrol import controller as controller_module
@@ -136,3 +138,47 @@ class TestMoveUpDown:
         controller.move_down()
         assert controller.config.bed_up is False
         assert Config.load(controller.config.path).bed_up is False
+
+
+class TestAsyncMovement:
+    def test_run_async_runs_action_and_completes(self, controller):
+        ran = threading.Event()
+        assert controller.run_async(ran.set) is True
+        controller.wait_for_move(timeout=1)
+        assert ran.is_set()
+        assert controller.is_moving is False
+
+    def test_is_moving_true_while_action_runs(self, controller):
+        started = threading.Event()
+        release = threading.Event()
+
+        def action():
+            started.set()
+            release.wait(1)
+
+        controller.run_async(action)
+        assert started.wait(1)
+        assert controller.is_moving is True
+        release.set()
+        controller.wait_for_move(timeout=1)
+        assert controller.is_moving is False
+
+    def test_second_move_is_rejected_while_moving(self, controller):
+        started = threading.Event()
+        release = threading.Event()
+
+        def action():
+            started.set()
+            release.wait(1)
+
+        assert controller.run_async(action) is True
+        assert started.wait(1)
+        assert controller.run_async(lambda: None) is False
+        release.set()
+        controller.wait_for_move(timeout=1)
+
+    def test_on_complete_runs_after_action(self, controller):
+        order = []
+        controller.run_async(lambda: order.append("action"), on_complete=lambda: order.append("done"))
+        controller.wait_for_move(timeout=1)
+        assert order == ["action", "done"]

@@ -2,6 +2,7 @@
 
 from enum import Enum
 from time import sleep
+import threading
 
 import RPi.GPIO as GPIO
 
@@ -26,6 +27,7 @@ CORRECTION_STEPS = 100
 class BedController:
     def __init__(self, config: Config):
         self.config = config
+        self._move_thread = None
         self._setup_gpio()
 
     def _setup_gpio(self):
@@ -34,6 +36,35 @@ class BedController:
         GPIO.setup(Pins.FRONT_DIR.value, GPIO.OUT)
         GPIO.setup(Pins.BACK_PUL.value, GPIO.OUT)
         GPIO.setup(Pins.BACK_DIR.value, GPIO.OUT)
+
+    @property
+    def is_moving(self):
+        return self._move_thread is not None and self._move_thread.is_alive()
+
+    def run_async(self, action, on_complete=None):
+        """Run a movement in a background thread so the UI stays responsive.
+
+        Only one movement runs at a time; returns False if one is already active.
+        """
+        if self.is_moving:
+            return False
+
+        def worker():
+            try:
+                action()
+            finally:
+                if on_complete is not None:
+                    on_complete()
+
+        self._move_thread = threading.Thread(target=worker, daemon=True)
+        self._move_thread.start()
+        return True
+
+    def wait_for_move(self, timeout=None):
+        """Block until the current movement finishes (mainly used by tests)."""
+        thread = self._move_thread
+        if thread is not None:
+            thread.join(timeout)
 
     @staticmethod
     def calculate_sleep_from_pps(pps):

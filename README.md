@@ -10,6 +10,9 @@ The code is split into layers: `config` (persistent settings), `controller`
 (motion/hardware logic, no GUI) and `gui` (guizero UI). This keeps the logic
 testable without a Raspberry Pi.
 
+Bed movement runs in a background thread, so the UI stays responsive while the
+bed moves. Only one movement runs at a time.
+
 ## Project structure
 
 ```
