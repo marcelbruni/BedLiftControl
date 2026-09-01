@@ -1,14 +1,45 @@
-"""Characterization tests that pin the current behaviour before refactoring.
+"""Characterization / behaviour tests for the logic and config layers.
 
-These tests describe what the code does *today*. If any of them start failing
-after a refactor, the observable behaviour changed and needs a closer look.
+guizero and RPi.GPIO are mocked in conftest.py, so these run on any machine.
 """
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 
-from bedliftcontrol import main
+from bedliftcontrol import controller as controller_module
+from bedliftcontrol.config import Config
+from bedliftcontrol.controller import BedController, Direction, Pins
+
+
+@pytest.fixture
+def gpio(monkeypatch):
+    fake = MagicMock()
+    monkeypatch.setattr(controller_module, "GPIO", fake)
+    monkeypatch.setattr(controller_module, "sleep", lambda *_: None)
+    return fake
+
+
+@pytest.fixture
+def controller(gpio, tmp_path):
+    config = Config(total_steps=10, speed_pps=800.0, bed_up=False, path=str(tmp_path / "config.json"))
+    return BedController(config)
+
+
+class TestConfig:
+    def test_load_missing_returns_defaults(self, tmp_path):
+        config = Config.load(str(tmp_path / "does_not_exist.json"))
+        assert config.total_steps == 28000
+        assert config.speed_pps == 800.0
+        assert config.bed_up is False
+
+    def test_save_then_load_roundtrip(self, tmp_path):
+        path = str(tmp_path / "config.json")
+        Config(total_steps=29000, speed_pps=1200.0, bed_up=True, path=path).save()
+        loaded = Config.load(path)
+        assert loaded.total_steps == 29000
+        assert loaded.speed_pps == 1200.0
+        assert loaded.bed_up is True
 
 
 class TestCalculateSleepFromPps:
@@ -21,92 +52,87 @@ class TestCalculateSleepFromPps:
         ],
     )
     def test_returns_half_pulse_period(self, pps, expected):
-        assert main.calculate_sleep_from_pps(pps) == expected
+        assert BedController.calculate_sleep_from_pps(pps) == expected
 
 
 class TestEnums:
     def test_direction_values(self):
-        assert main.Direction.UP.value == 0
-        assert main.Direction.DOWN.value == 1
+        assert Direction.UP.value == 0
+        assert Direction.DOWN.value == 1
 
     def test_pin_values(self):
-        assert main.Pins.FRONT_PUL.value == 27
-        assert main.Pins.BACK_PUL.value == 24
-        assert main.Pins.FRONT_DIR.value == 22
-        assert main.Pins.BACK_DIR.value == 23
-
-
-class TestReadFiles:
-    def test_read_steps_file_returns_int(self, tmp_path, monkeypatch):
-        f = tmp_path / "steps.txt"
-        f.write_text("28000")
-        monkeypatch.setattr(main, "STEPS_FILE", str(f))
-        result = main.read_steps_file()
-        assert result == 28000
-        assert isinstance(result, int)
-
-    def test_read_speed_file_returns_float(self, tmp_path, monkeypatch):
-        f = tmp_path / "speed.txt"
-        f.write_text("800")
-        monkeypatch.setattr(main, "SPEED_FILE", str(f))
-        result = main.read_speed_file()
-        assert result == 800.0
-        assert isinstance(result, float)
-
-    def test_read_position_file_bed_up(self, tmp_path, monkeypatch):
-        f = tmp_path / "position.txt"
-        f.write_text("1")
-        monkeypatch.setattr(main, "POSITION_FILE", str(f))
-        assert main.read_position_file() == 1
-
-    def test_read_position_file_bed_down(self, tmp_path, monkeypatch):
-        f = tmp_path / "position.txt"
-        f.write_text("0")
-        monkeypatch.setattr(main, "POSITION_FILE", str(f))
-        assert main.read_position_file() == 0
-
-
-class TestWriteFiles:
-    def test_write_steps_file(self, tmp_path, monkeypatch):
-        f = tmp_path / "steps.txt"
-        monkeypatch.setattr(main, "STEPS_FILE", str(f))
-        monkeypatch.setattr(main, "steps_text", MagicMock())
-        main.write_steps_file(28000)
-        assert f.read_text() == "28000"
-
-    def test_write_speed_file(self, tmp_path, monkeypatch):
-        f = tmp_path / "speed.txt"
-        monkeypatch.setattr(main, "SPEED_FILE", str(f))
-        monkeypatch.setattr(main, "speed_text", MagicMock())
-        main.write_speed_file(800)
-        assert f.read_text() == "800"
-
-    def test_write_position_file_up(self, tmp_path, monkeypatch):
-        f = tmp_path / "position.txt"
-        monkeypatch.setattr(main, "POSITION_FILE", str(f))
-        monkeypatch.setattr(main, "position_text", MagicMock())
-        main.write_position_file("1")
-        assert f.read_text() == "1"
-
-    def test_write_position_file_down(self, tmp_path, monkeypatch):
-        f = tmp_path / "position.txt"
-        monkeypatch.setattr(main, "POSITION_FILE", str(f))
-        monkeypatch.setattr(main, "position_text", MagicMock())
-        main.write_position_file("0")
-        assert f.read_text() == "0"
+        assert Pins.FRONT_PUL.value == 27
+        assert Pins.BACK_PUL.value == 24
+        assert Pins.FRONT_DIR.value == 22
+        assert Pins.BACK_DIR.value == 23
 
 
 class TestChangeDirection:
-    def test_down_sets_both_dir_pins_to_down(self, monkeypatch):
-        gpio = MagicMock()
-        monkeypatch.setattr(main, "GPIO", gpio)
-        main.change_direction(1)
-        gpio.output.assert_any_call(main.Pins.FRONT_DIR.value, main.Direction.DOWN.value)
-        gpio.output.assert_any_call(main.Pins.BACK_DIR.value, main.Direction.DOWN.value)
+    def test_down_sets_both_dir_pins_to_down(self, controller, gpio):
+        controller.change_direction(1)
+        gpio.output.assert_any_call(Pins.FRONT_DIR.value, Direction.DOWN.value)
+        gpio.output.assert_any_call(Pins.BACK_DIR.value, Direction.DOWN.value)
 
-    def test_up_sets_both_dir_pins_to_up(self, monkeypatch):
-        gpio = MagicMock()
-        monkeypatch.setattr(main, "GPIO", gpio)
-        main.change_direction(0)
-        gpio.output.assert_any_call(main.Pins.FRONT_DIR.value, main.Direction.UP.value)
-        gpio.output.assert_any_call(main.Pins.BACK_DIR.value, main.Direction.UP.value)
+    def test_up_sets_both_dir_pins_to_up(self, controller, gpio):
+        controller.change_direction(0)
+        gpio.output.assert_any_call(Pins.FRONT_DIR.value, Direction.UP.value)
+        gpio.output.assert_any_call(Pins.BACK_DIR.value, Direction.UP.value)
+
+
+class TestMoveStepSingle:
+    def test_pulses_the_given_pin_high_then_low(self, controller, gpio):
+        gpio.reset_mock()
+        controller.move_step_single(Pins.BACK_PUL.value, 0.01)
+        assert gpio.output.call_args_list == [
+            call(Pins.BACK_PUL.value, 1),
+            call(Pins.BACK_PUL.value, 0),
+        ]
+
+    def test_uses_exactly_the_pin_it_is_given(self, controller, gpio):
+        gpio.reset_mock()
+        controller.move_step_single(Pins.FRONT_PUL.value, 0.01)
+        assert gpio.output.call_args_list == [
+            call(Pins.FRONT_PUL.value, 1),
+            call(Pins.FRONT_PUL.value, 0),
+        ]
+
+    def test_sleeps_twice_per_step(self, controller, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(controller_module, "sleep", recorded.append)
+        controller.move_step_single(Pins.BACK_PUL.value, 0.01)
+        assert recorded == [0.01, 0.01]
+
+
+class TestMoveStep:
+    def test_pulses_both_pins_high_then_low(self, controller, gpio):
+        gpio.reset_mock()
+        controller.move_step(0.01)
+        assert gpio.output.call_args_list == [
+            call(Pins.FRONT_PUL.value, 1),
+            call(Pins.BACK_PUL.value, 1),
+            call(Pins.FRONT_PUL.value, 0),
+            call(Pins.BACK_PUL.value, 0),
+        ]
+
+
+class TestMoveSteps:
+    def test_calls_move_step_once_per_step(self, controller, monkeypatch):
+        count = {"n": 0}
+        monkeypatch.setattr(controller, "move_step", lambda _: count.__setitem__("n", count["n"] + 1))
+        controller.move_steps(Direction.UP.value, 7)
+        assert count["n"] == 7
+
+
+class TestMoveUpDown:
+    def test_move_up_sets_bed_up_and_persists(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "move_steps", lambda *_: None)
+        controller.move_up()
+        assert controller.config.bed_up is True
+        assert Config.load(controller.config.path).bed_up is True
+
+    def test_move_down_clears_bed_up_and_persists(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "move_steps", lambda *_: None)
+        controller.config.bed_up = True
+        controller.move_down()
+        assert controller.config.bed_up is False
+        assert Config.load(controller.config.path).bed_up is False

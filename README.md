@@ -6,18 +6,23 @@ The application shows a [guizero](https://lawsie.github.io/guizero/) GUI to move
 bed up and down, adjust speed and total steps, and apply manual front/back
 corrections. Motor pulses are sent over the Raspberry Pi GPIO pins via `RPi.GPIO`.
 
+The code is split into layers: `config` (persistent settings), `controller`
+(motion/hardware logic, no GUI) and `gui` (guizero UI). This keeps the logic
+testable without a Raspberry Pi.
+
 ## Project structure
 
 ```
 BedLiftControl/
-├── data/                       # Runtime state files (steps, speed, position)
-│   ├── steps.txt
-│   ├── speed.txt
-│   └── position.txt
+├── data/
+│   └── config.json          # Persistent settings (steps, speed, bed position)
 ├── src/
 │   └── bedliftcontrol/
 │       ├── __init__.py
-│       └── main.py             # Main application
+│       ├── config.py        # Config dataclass, load/save JSON
+│       ├── controller.py    # BedController: motion + GPIO logic (no GUI)
+│       ├── gui.py           # BedGui: guizero user interface
+│       └── main.py          # Entry point
 ├── tests/
 ├── pyproject.toml
 ├── requirements.txt
@@ -37,8 +42,11 @@ pip install -r requirements.txt
 ## Run
 
 ```bash
-python src/bedliftcontrol/main.py
+cd src
+python -m bedliftcontrol.main
 ```
+
+Or, after `pip install -e .`, simply run the `bedliftcontrol` command.
 
 ## Tests
 
@@ -76,7 +84,14 @@ direction (DIR) pin:
 | BACK_PUL   | 24         |
 | BACK_DIR   | 23         |
 
-## Notes
+## Configuration
 
-The current code is a first version and will be cleaned up. The state files are
-read from and written to the repo's `data/` directory.
+All settings live in a single file, `data/config.json`:
+
+| Key           | Meaning                                  |
+|---------------|------------------------------------------|
+| `total_steps` | Steps for a full up/down travel          |
+| `speed_pps`   | Motor speed in pulses per second         |
+| `bed_up`      | Whether the bed is currently raised      |
+
+The file is written automatically when settings change or the bed is moved.
