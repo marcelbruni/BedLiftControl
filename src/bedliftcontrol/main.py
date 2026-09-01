@@ -10,6 +10,11 @@ STEPS_FILE = str(DATA_DIR / "steps.txt")
 SPEED_FILE = str(DATA_DIR / "speed.txt")
 POSITION_FILE = str(DATA_DIR / "position.txt")
 
+# ui / message constants
+BACKGROUND_COLOR = "dim grey"
+MOVE_FINISHED = "move finished"
+BED_UP_LABEL = "bed up: "
+
 # enums
 class Direction(Enum):
     UP = 0
@@ -38,9 +43,9 @@ def read_speed_file():
 
 def read_position_file():
     position = False
-    fileName = POSITION_FILE
-    print("Reading " + fileName)
-    with open(fileName) as f:
+    filename = POSITION_FILE
+    print("Reading " + filename)
+    with open(filename) as f:
         lines = f.readlines()
     if(lines[0] == "1"):
         position = True
@@ -84,7 +89,7 @@ def calculate_sleep_from_pps(pps):
 
 # methods for additional windows
 def settings_window():
-    window = Window(app, layout="grid", width="575", height="213", bg="dim grey", title="Settings")
+    window = Window(app, layout="grid", width="575", height="213", bg=BACKGROUND_COLOR, title="Settings")
     Text(window, grid=[0,0], align="right", text="total steps", font="Piboto")
     Text(window, grid=[0,1], align="right", text="bed up", font="Piboto")
     Text(window, grid=[0,2], align="right", text="speed pps", font="Piboto")
@@ -102,7 +107,7 @@ def corrections_window():
     text_size = 28
     button_width= 10
     button_height=3
-    window = Window(app, layout="grid", width="590", height="350", bg="dim grey", title="Corrections")
+    window = Window(app, layout="grid", width="590", height="350", bg=BACKGROUND_COLOR, title="Corrections")
     Text(window, grid=[0,0], text="  ")
     Text(window, grid=[1,0], text="back correction")
     Text(window, grid=[2,0], text="     ")
@@ -121,7 +126,7 @@ def corrections_window():
     front_down_button.text_size = text_size
 
 def not_implemented_window():
-    window = Window(app, width="200", height="40", bg="dim grey", title="Not Implemented!")
+    window = Window(app, width="200", height="40", bg=BACKGROUND_COLOR, title="Not Implemented!")
     Text(window, text="not implemented!")
 
 # methods for setting up stuff
@@ -140,23 +145,23 @@ def move_steps(direction, steps):
     sleeptime = calculate_sleep_from_pps(read_speed_file())
     print("movesteps 3")
     print(sleeptime)
-    for x in range(steps):
+    for _ in range(steps):
         move_step(sleeptime)
-    print('move finished')
+    print(MOVE_FINISHED)
 
 def move_steps_single_back(direction, steps):
     change_direction(direction)
     sleeptime = calculate_sleep_from_pps(read_speed_file())
-    for x in range(steps):
+    for _ in range(steps):
         move_step_single_back(sleeptime)
-    print('move finished')
+    print(MOVE_FINISHED)
 
 def move_steps_single_front(direction, steps):
     change_direction(direction)
     sleeptime = calculate_sleep_from_pps(read_speed_file())
-    for x in range(steps):
+    for _ in range(steps):
         move_step_single_front(sleeptime)
-    print('move finished')
+    print(MOVE_FINISHED)
 
 # methods for single step pulse pin output
 def move_step(sleeptime):
@@ -180,8 +185,8 @@ def move_step_single_front(sleeptime):
     sleep(sleeptime)
 
 # methods for direction pin outputs
-def change_direction(newDirection):
-    if newDirection > 0:
+def change_direction(newdirection):
+    if newdirection > 0:
         GPIO.output(Pins.FRONT_DIR.value, Direction.DOWN.value)
         GPIO.output(Pins.BACK_DIR.value, Direction.DOWN.value)
     else:
@@ -211,7 +216,7 @@ def move_up():
     write_position_file(1)
     print("test 4")
     set_slider_value(100)
-    position_text.value = "bed up: " + str(bool(read_position_file()))
+    position_text.value = BED_UP_LABEL + str(bool(read_position_file()))
     info("Bett oben", "Sicherungsseile anbringen und Motoren ausschalten!")
 
 def move_down():
@@ -221,11 +226,11 @@ def move_down():
     move_steps(Direction.DOWN.value, read_steps_file())
     write_position_file(0)
     set_slider_value(0)
-    position_text.value = "bed up: " + str(bool(read_position_file()))
+    position_text.value = BED_UP_LABEL + str(bool(read_position_file()))
 
 # ---------------------------------------------
 # initializing main window
-app = App(title="Steuerung Bettmotoren", width=800, height=420, bg="dim grey")
+app = App(title="Steuerung Bettmotoren", width=800, height=420, bg=BACKGROUND_COLOR)
 app.font = "Piboto Bold"
 app.text_color = "white"
 
@@ -242,12 +247,12 @@ down_button.text_size = 118
 
 # setting up main box (slider box + content box)
 main_box = Box(app, layout="grid", align="top", width="fill", height="370", border=True)
-main_box.bg = "dim grey"
+main_box.bg = BACKGROUND_COLOR
 main_box.text_color = "white"
 
 # setting up slider box (left element)
 slider_box = Box(main_box, grid=[0,0], align="left", width="40", height="370", border=False, enabled=False)
-slider_box.bg = "dim grey"
+slider_box.bg = BACKGROUND_COLOR
 slider_box.text_color = "white"
 slider = Slider(slider_box, horizontal=False, align="left", height='370', width="40", start=100, end=0)
 slider.text_size=12
@@ -259,7 +264,7 @@ else:
 # setting up content box (center element)
 content_box = Box(main_box, grid=[1,0], layout="grid", align="top", width="fill", height="370", border=False)
 state_title = Text(content_box, grid=[0,0], align="left", text="States")
-position_text = Text(content_box, grid=[0,1], align="left", text="bed up: " + str(bool(read_position_file())), font="Piboto")
+position_text = Text(content_box, grid=[0,1], align="left", text=BED_UP_LABEL + str(bool(read_position_file())), font="Piboto")
 twothirty_text = Text(content_box, grid=[0,2], align="left", text="230V running: not implemented yet", font="Piboto")
 motors_text = Text(content_box, grid=[0,3], align="left", text="24V running: not implemented yet", font="Piboto")
 config_title = Text(content_box, grid=[0,4], align="left", text="Settings")
@@ -268,7 +273,7 @@ speed_text = Text(content_box, grid=[0,6], align="left", text="speed in pps: " +
 
 # setting up button box (bottom element)
 button_box = Box(app, width="fill", height=50, align="bottom", border=True)
-button_box.bg = "dim grey"
+button_box.bg = BACKGROUND_COLOR
 button_box.text_color = "white"
 PushButton(button_box, align="left", width=2, command=settings_window, text="⚙")
 PushButton(button_box, align="left", width=2, command=corrections_window, text="↑↓")

@@ -46,9 +46,22 @@ Characterization tests pin the current behaviour so a refactor can be verified t
 not change anything. They mock `guizero` and `RPi.GPIO`, so they run on any
 machine (no Raspberry Pi required).
 
+On the Raspberry Pi (or any machine with Python on the PATH):
+
 ```bash
 pip install -r requirements-dev.txt
 pytest
+```
+
+On a Windows dev machine using a local virtual environment:
+
+```powershell
+# one-time setup
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+
+# run the tests (repeat this any time)
+.\.venv\Scripts\python.exe -m pytest
 ```
 
 ## Hardware
