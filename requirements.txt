@@ -1,0 +1,3 @@
+# External dependencies for the Raspberry Pi bed lift controller.
+guizero
+RPi.GPIO

@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bedliftcontrol"
+version = "0.1.0"
+description = "Raspberry Pi controller for two stepper motors that raise and lower a car bed."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "guizero",
+    "RPi.GPIO",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
