@@ -17,7 +17,7 @@ BedLiftControl/
 ├── src/
 │   └── bedliftcontrol/
 │       ├── __init__.py
-│       └── bedcontrolv2.py     # Main application
+│       └── main.py             # Main application
 ├── tests/
 ├── pyproject.toml
 ├── requirements.txt
@@ -37,7 +37,7 @@ pip install -r requirements.txt
 ## Run
 
 ```bash
-python src/bedliftcontrol/bedcontrolv2.py
+python src/bedliftcontrol/main.py
 ```
 
 ## Hardware
@@ -54,5 +54,5 @@ direction (DIR) pin:
 
 ## Notes
 
-The current code is a first version and will be cleaned up. Paths to the state
-files are currently hard-coded to `/home/pi/Desktop/`.
+The current code is a first version and will be cleaned up. The state files are
+read from and written to the repo's `data/` directory.
