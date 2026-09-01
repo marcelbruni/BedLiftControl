@@ -40,6 +40,17 @@ pip install -r requirements.txt
 python src/bedliftcontrol/main.py
 ```
 
+## Tests
+
+Characterization tests pin the current behaviour so a refactor can be verified to
+not change anything. They mock `guizero` and `RPi.GPIO`, so they run on any
+machine (no Raspberry Pi required).
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
 ## Hardware
 
 Two stepper motor drivers (front and back), each wired with a pulse (PUL) and
