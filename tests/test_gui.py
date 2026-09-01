@@ -114,3 +114,22 @@ class TestCorrect:
         action = MagicMock()
         gui._correct(action)
         controller.run_async.assert_not_called()
+
+
+class TestWindowToggle:
+    def test_second_click_closes_the_window(self, gui):
+        gui._settings_window()  # opens
+        window = gui._open_windows["settings"]
+        gui._settings_window()  # same button again -> closes
+        assert "settings" not in gui._open_windows
+        window.destroy.assert_called_once()
+
+    def test_closing_via_x_clears_the_reference(self, gui):
+        gui._corrections_window()
+        gui._on_window_closed("corrections")
+        assert "corrections" not in gui._open_windows
+
+    def test_each_button_tracks_its_own_window(self, gui):
+        gui._settings_window()
+        gui._corrections_window()
+        assert set(gui._open_windows) == {"settings", "corrections"}
