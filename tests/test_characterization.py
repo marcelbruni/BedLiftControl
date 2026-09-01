@@ -3,9 +3,8 @@
 guizero and RPi.GPIO are mocked in conftest.py, so these run on any machine.
 """
 
-from unittest.mock import MagicMock, call
-
 import threading
+from unittest.mock import MagicMock, call
 
 import pytest
 
@@ -43,6 +42,32 @@ class TestConfig:
         assert loaded.speed_pps == 1200.0
         assert loaded.bed_up is True
 
+    def test_load_corrupt_file_returns_defaults(self, tmp_path):
+        path = tmp_path / "config.json"
+        path.write_text("{ not valid json")
+        config = Config.load(str(path))
+        assert config.total_steps == 28000
+
+    def test_load_missing_keys_returns_defaults(self, tmp_path):
+        path = tmp_path / "config.json"
+        path.write_text('{"total_steps": 5}')
+        config = Config.load(str(path))
+        assert config.total_steps == 28000
+
+    def test_load_invalid_values_are_clamped(self, tmp_path):
+        path = tmp_path / "config.json"
+        path.write_text('{"total_steps": 0, "speed_pps": -5, "bed_up": true}')
+        config = Config.load(str(path))
+        assert config.total_steps == 28000
+        assert config.speed_pps == 800.0
+        assert config.bed_up is True
+
+    def test_save_is_atomic_and_leaves_no_temp_file(self, tmp_path):
+        path = tmp_path / "config.json"
+        Config(total_steps=1, speed_pps=2.0, bed_up=False, path=str(path)).save()
+        assert path.exists()
+        assert not (tmp_path / "config.json.tmp").exists()
+
 
 class TestCalculateSleepFromPps:
     @pytest.mark.parametrize(
@@ -55,6 +80,11 @@ class TestCalculateSleepFromPps:
     )
     def test_returns_half_pulse_period(self, pps, expected):
         assert BedController.calculate_sleep_from_pps(pps) == expected
+
+    @pytest.mark.parametrize("pps", [0, -1, -100])
+    def test_rejects_non_positive(self, pps):
+        with pytest.raises(ValueError):
+            BedController.calculate_sleep_from_pps(pps)
 
 
 class TestEnums:
@@ -124,6 +154,22 @@ class TestMoveSteps:
         controller.move_steps(Direction.UP.value, 7)
         assert count["n"] == 7
 
+    def test_reports_progress_and_resets_when_done(self, controller, monkeypatch):
+        seen = []
+        monkeypatch.setattr(controller, "move_step", lambda _: seen.append(controller.progress))
+        controller.move_steps(Direction.UP.value, 4)
+        assert seen == [0.0, 0.25, 0.5, 0.75]
+        assert controller.progress == 0.0
+
+    def test_ramps_speed_at_start_and_end(self, controller, monkeypatch):
+        sleeps = []
+        monkeypatch.setattr(controller, "move_step", lambda s: sleeps.append(s))
+        controller.move_steps(Direction.UP.value, 2000)
+        target = BedController.calculate_sleep_from_pps(controller.config.speed_pps)
+        assert sleeps[0] > target                     # starts slower (accelerates)
+        assert sleeps[-1] > target                    # ends slower (decelerates)
+        assert min(sleeps) == pytest.approx(target)   # reaches full speed in the middle
+
 
 class TestMoveUpDown:
     def test_move_up_sets_bed_up_and_persists(self, controller, monkeypatch):
@@ -138,6 +184,12 @@ class TestMoveUpDown:
         controller.move_down()
         assert controller.config.bed_up is False
         assert Config.load(controller.config.path).bed_up is False
+
+
+class TestCleanup:
+    def test_cleanup_releases_gpio(self, controller, gpio):
+        controller.cleanup()
+        gpio.cleanup.assert_called_once()
 
 
 class TestAsyncMovement:
@@ -182,3 +234,14 @@ class TestAsyncMovement:
         controller.run_async(lambda: order.append("action"), on_complete=lambda: order.append("done"))
         controller.wait_for_move(timeout=1)
         assert order == ["action", "done"]
+
+    def test_exception_in_action_still_runs_on_complete(self, controller):
+        completed = threading.Event()
+
+        def boom():
+            raise RuntimeError("motor jammed")
+
+        controller.run_async(boom, on_complete=completed.set)
+        controller.wait_for_move(timeout=1)
+        assert completed.is_set()
+        assert controller.is_moving is False

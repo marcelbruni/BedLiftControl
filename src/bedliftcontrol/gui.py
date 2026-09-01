@@ -1,23 +1,40 @@
 """guizero user interface for the bed lift. Delegates all motion to BedController."""
 
+import logging
+from enum import Enum
+
 from guizero import App, Box, Text, PushButton, info, Slider, Window
 
 from bedliftcontrol.controller import BedController
+
+logger = logging.getLogger(__name__)
 
 BACKGROUND_COLOR = "dim grey"
 TEXT_COLOR = "white"
 BED_UP_LABEL = "bed up: "
 STEPS_LABEL = "total steps: "
 SPEED_LABEL = "speed in pps: "
+PROGRESS_LABEL = "moving: "
+
+POLL_INTERVAL_MS = 100
+STEPS_MIN = 27000
+STEPS_MAX = 30000
+SPEED_MIN = 200
+SPEED_MAX = 1400
+
+
+class MoveContext(Enum):
+    UP = "up"
+    DOWN = "down"
 
 
 class BedGui:
     def __init__(self, controller: BedController):
         self.controller = controller
-        self._move_context = None
+        self._move_context: MoveContext | None = None
         self._build()
 
-    def _build(self):
+    def _build(self) -> None:
         self.app = App(title="Steuerung Bettmotoren", width=800, height=420, bg=BACKGROUND_COLOR)
         self.app.font = "Piboto Bold"
         self.app.text_color = TEXT_COLOR
@@ -42,6 +59,7 @@ class BedGui:
         Text(content_box, grid=[0, 4], align="left", text="Settings")
         self.steps_text = Text(content_box, grid=[0, 5], align="left", text=STEPS_LABEL + str(self.controller.config.total_steps), font="Piboto")
         self.speed_text = Text(content_box, grid=[0, 6], align="left", text=SPEED_LABEL + str(self.controller.config.speed_pps), font="Piboto")
+        self.progress_text = Text(content_box, grid=[0, 7], align="left", text="", font="Piboto")
 
         # bottom button bar
         button_box = Box(self.app, width="fill", height=50, align="bottom", border=True)
@@ -57,38 +75,39 @@ class BedGui:
         else:
             self.down_button.enabled = False
 
-    def _bed_up_text(self):
+    def _bed_up_text(self) -> str:
         return BED_UP_LABEL + str(self.controller.config.bed_up)
 
-    def _refresh_state(self):
+    def _refresh_state(self) -> None:
         self.position_text.value = self._bed_up_text()
 
-    def _on_up(self):
-        if self.controller.is_moving:
-            return
+    def _start_move(self, context: MoveContext, action) -> None:
         self.up_button.enabled = False
         self.down_button.enabled = False
-        self._move_context = "up"
-        self.controller.run_async(self.controller.move_up)
-        self.app.repeat(100, self._poll_movement)
+        self._move_context = context
+        self.controller.run_async(action)
+        self.app.repeat(POLL_INTERVAL_MS, self._poll_movement)
 
-    def _on_down(self):
+    def _on_up(self) -> None:
+        if self.controller.is_moving:
+            return
+        self._start_move(MoveContext.UP, self.controller.move_up)
+
+    def _on_down(self) -> None:
         if self.controller.is_moving:
             return
         info("Bett herunterfahren", "Motoren einschalten und Sicherungsseile lösen!")
-        self.up_button.enabled = False
-        self.down_button.enabled = False
-        self._move_context = "down"
-        self.controller.run_async(self.controller.move_down)
-        self.app.repeat(100, self._poll_movement)
+        self._start_move(MoveContext.DOWN, self.controller.move_down)
 
-    def _poll_movement(self):
-        # runs on the main thread; wait until the background move has finished
+    def _poll_movement(self) -> None:
+        # runs on the main thread; update progress until the background move finishes
         if self.controller.is_moving:
+            self.progress_text.value = PROGRESS_LABEL + str(round(self.controller.progress * 100)) + "%"
             return
         self.app.cancel(self._poll_movement)
+        self.progress_text.value = ""
         self._refresh_state()
-        if self._move_context == "up":
+        if self._move_context == MoveContext.UP:
             self.up_button.enabled = False
             self.down_button.enabled = True
             info("Bett oben", "Sicherungsseile anbringen und Motoren ausschalten!")
@@ -97,33 +116,33 @@ class BedGui:
             self.down_button.enabled = False
         self._move_context = None
 
-    def _correct(self, action):
+    def _correct(self, action) -> None:
         if self.controller.is_moving:
             return
         self.controller.run_async(action)
 
-    def _settings_window(self):
+    def _settings_window(self) -> None:
         window = Window(self.app, layout="grid", width="575", height="150", bg=BACKGROUND_COLOR, title="Settings")
         Text(window, grid=[0, 0], align="right", text="total steps", font="Piboto")
         Text(window, grid=[0, 1], align="right", text="speed pps", font="Piboto")
-        steps_slider = Slider(window, grid=[1, 0], align="left", height="40", width="488", start=27000, end=30000, command=self._on_steps_change)
+        steps_slider = Slider(window, grid=[1, 0], align="left", height="40", width="488", start=STEPS_MIN, end=STEPS_MAX, command=self._on_steps_change)
         steps_slider.value = self.controller.config.total_steps
         steps_slider.text_size = 12
-        speed_slider = Slider(window, grid=[1, 1], align="left", height="40", width="488", start=200, end=1400, command=self._on_speed_change)
+        speed_slider = Slider(window, grid=[1, 1], align="left", height="40", width="488", start=SPEED_MIN, end=SPEED_MAX, command=self._on_speed_change)
         speed_slider.value = self.controller.config.speed_pps
         speed_slider.text_size = 12
 
-    def _on_steps_change(self, value):
+    def _on_steps_change(self, value) -> None:
         self.controller.config.total_steps = int(value)
         self.controller.config.save()
         self.steps_text.value = STEPS_LABEL + str(int(value))
 
-    def _on_speed_change(self, value):
+    def _on_speed_change(self, value) -> None:
         self.controller.config.speed_pps = float(value)
         self.controller.config.save()
         self.speed_text.value = SPEED_LABEL + str(value)
 
-    def _corrections_window(self):
+    def _corrections_window(self) -> None:
         text_size = 28
         button_width = 10
         button_height = 3
@@ -145,9 +164,9 @@ class BedGui:
         front_down_button = PushButton(window, grid=[3, 2], width=button_width, height=button_height, command=lambda: self._correct(self.controller.correct_front_down), text="↓")
         front_down_button.text_size = text_size
 
-    def _not_implemented_window(self):
+    def _not_implemented_window(self) -> None:
         window = Window(self.app, width="200", height="40", bg=BACKGROUND_COLOR, title="Not Implemented!")
         Text(window, text="not implemented!")
 
-    def display(self):
+    def display(self) -> None:
         self.app.display()
