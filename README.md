@@ -2,9 +2,10 @@
 
 Raspberry Pi controller for two stepper motors that raise and lower a bed in a car.
 
-The application shows a [guizero](https://lawsie.github.io/guizero/) GUI to move the
-bed up and down, adjust speed and total steps, and apply manual front/back
-corrections. Motor pulses are sent over the Raspberry Pi GPIO pins via `RPi.GPIO`.
+The application shows a [CustomTkinter](https://customtkinter.tomschimansky.com/)
+GUI to move the bed up and down, adjust speed and total steps, and apply manual
+front/back corrections. Motor pulses are sent over the Raspberry Pi GPIO pins via
+`RPi.GPIO`.
 
 The code is split into layers: `config` (persistent settings), `controller`
 (motion/hardware logic, no GUI) and `gui` (guizero UI). This keeps the logic
@@ -24,7 +25,7 @@ BedLiftControl/
 │       ├── __init__.py
 │       ├── config.py        # Config dataclass, load/save JSON
 │       ├── controller.py    # BedController: motion + GPIO logic (no GUI)
-│       ├── gui.py           # BedGui: guizero user interface
+│       ├── gui.py           # BedGui: CustomTkinter user interface
 │       └── main.py          # Entry point
 ├── tests/
 ├── pyproject.toml
@@ -79,7 +80,7 @@ If the GPIO pins need root access, add your user to the `gpio` group
 ## Tests
 
 Characterization tests pin the current behaviour so a refactor can be verified to
-not change anything. They mock `guizero` and `RPi.GPIO`, so they run on any
+not change anything. They mock `customtkinter` and `RPi.GPIO`, so they run on any
 machine (no Raspberry Pi required).
 
 On the Raspberry Pi (or any machine with Python on the PATH):

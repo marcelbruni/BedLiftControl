@@ -1,17 +1,22 @@
-"""guizero user interface for the bed lift. Delegates all motion to BedController."""
+"""CustomTkinter user interface for the bed lift. Delegates all motion to BedController."""
 
 import logging
 from enum import Enum
+from tkinter import messagebox
 
-from guizero import App, Box, Text, PushButton, info, Slider, Window
+import customtkinter as ctk
 
 from bedliftcontrol.controller import BedController
 
 logger = logging.getLogger(__name__)
 
-BACKGROUND_COLOR = "dim grey"
-TEXT_COLOR = "white"
-PROGRESS_LABEL = "moving: "
+APPEARANCE_MODE = "dark"
+COLOR_THEME = "green"
+PROGRESS_COLOR = "#43a047"
+ARROW_FONT_SIZE = 96
+BUTTON_COLOR = "#2fa572"
+BUTTON_DISABLED_COLOR = "#333333"
+CORRECTION_BUTTON_HEIGHT = 90
 
 POLL_INTERVAL_MS = 100
 STEPS_MIN = 27000
@@ -30,48 +35,68 @@ class BedGui:
         self.controller = controller
         self._move_context: MoveContext | None = None
         self._open_windows: dict[str, object] = {}
+        self._steps_value_label = None
+        self._speed_value_label = None
         self._build()
 
     def _build(self) -> None:
-        self.app = App(title="Steuerung Bettmotoren", width=800, height=420, bg=BACKGROUND_COLOR)
-        self.app.font = "Piboto Bold"
-        self.app.text_color = TEXT_COLOR
+        ctk.set_appearance_mode(APPEARANCE_MODE)
+        ctk.set_default_color_theme(COLOR_THEME)
 
-        # up/down control buttons
-        updown_box = Box(self.app, height="fill", align="right", border=True)
-        updown_box.text_color = TEXT_COLOR
-        self.up_button = PushButton(updown_box, align="top", width=1, height=1, command=self._on_up, text="↑")
-        self.up_button.text_size = 118
-        self.down_button = PushButton(updown_box, align="bottom", width=1, height=1, command=self._on_down, text="↓")
-        self.down_button.text_size = 118
+        self.app = ctk.CTk()
+        self.app.title("Steuerung Bettmotoren")
+        self.app.geometry("800x420")
 
-        # content box (progress only)
-        main_box = Box(self.app, layout="grid", align="top", width="fill", height="370", border=True)
-        main_box.bg = BACKGROUND_COLOR
-        main_box.text_color = TEXT_COLOR
-        content_box = Box(main_box, grid=[0, 0], layout="grid", align="top", width="fill", height="370", border=False)
-        self.progress_text = Text(content_box, grid=[0, 0], align="left", text="", font="Piboto")
+        # bottom action bar
+        bottom = ctk.CTkFrame(self.app, corner_radius=0)
+        bottom.pack(side="bottom", fill="x")
+        ctk.CTkButton(bottom, text="⚙", width=50, command=self._settings_window).pack(side="left", padx=4, pady=6)
+        ctk.CTkButton(bottom, text="↑↓", width=50, command=self._corrections_window).pack(side="left", padx=4, pady=6)
+        ctk.CTkButton(bottom, text="230V on/off", width=120, command=self._not_implemented_window).pack(side="left", padx=4, pady=6)
 
-        # bottom button bar
-        button_box = Box(self.app, width="fill", height=50, align="bottom", border=True)
-        button_box.bg = BACKGROUND_COLOR
-        button_box.text_color = TEXT_COLOR
-        PushButton(button_box, align="left", width=2, command=self._settings_window, text="⚙")
-        PushButton(button_box, align="left", width=2, command=self._corrections_window, text="↑↓")
-        PushButton(button_box, align="left", width=10, command=self._not_implemented_window, text="230V on/off")
+        # left vertical progress bar (fills from the bottom as the bed rises)
+        left = ctk.CTkFrame(self.app)
+        left.pack(side="left", fill="y", padx=10, pady=10)
+        self.progress_bar = ctk.CTkProgressBar(left, orientation="vertical", width=28, progress_color=PROGRESS_COLOR)
+        self.progress_bar.pack(side="top", fill="y", expand=True, pady=(6, 4))
+        self.progress_label = ctk.CTkLabel(left, text="", width=48)
+        self.progress_label.pack(side="bottom", pady=4)
 
-        # initial enabled state reflects the stored position
+        # right up/down control buttons
+        right = ctk.CTkFrame(self.app)
+        right.pack(side="right", fill="y", padx=10, pady=10)
+        arrow_font = ctk.CTkFont(size=ARROW_FONT_SIZE)
+        self.up_button = ctk.CTkButton(right, text="↑", font=arrow_font, width=180, command=self._on_up)
+        self.up_button.pack(side="top", fill="both", expand=True, pady=(0, 5))
+        self.down_button = ctk.CTkButton(right, text="↓", font=arrow_font, width=180, command=self._on_down)
+        self.down_button.pack(side="bottom", fill="both", expand=True)
+
+        # initial state reflects the stored position
         if self.controller.config.bed_up:
-            self.up_button.enabled = False
+            self._set_enabled(self.up_button, False)
         else:
-            self.down_button.enabled = False
+            self._set_enabled(self.down_button, False)
+        self._set_bar(1.0 if self.controller.config.bed_up else 0.0)
+
+    @staticmethod
+    def _set_enabled(widget, enabled: bool) -> None:
+        widget.configure(
+            state="normal" if enabled else "disabled",
+            fg_color=BUTTON_COLOR if enabled else BUTTON_DISABLED_COLOR,
+        )
+
+    def _set_bar(self, fill_level: float) -> None:
+        self.progress_bar.set(max(0.0, min(1.0, fill_level)))
 
     def _start_move(self, context: MoveContext, action) -> None:
-        self.up_button.enabled = False
-        self.down_button.enabled = False
+        self._set_enabled(self.up_button, False)
+        self._set_enabled(self.down_button, False)
         self._move_context = context
         self.controller.run_async(action)
-        self.app.repeat(POLL_INTERVAL_MS, self._poll_movement)
+        self._schedule_poll()
+
+    def _schedule_poll(self) -> None:
+        self.app.after(POLL_INTERVAL_MS, self._poll_movement)
 
     def _on_up(self) -> None:
         if self.controller.is_moving:
@@ -81,23 +106,27 @@ class BedGui:
     def _on_down(self) -> None:
         if self.controller.is_moving:
             return
-        info("Bett herunterfahren", "Motoren einschalten und Sicherungsseile lösen!")
+        messagebox.showinfo("Bett herunterfahren", "Motoren einschalten und Sicherungsseile lösen!")
         self._start_move(MoveContext.DOWN, self.controller.move_down)
 
     def _poll_movement(self) -> None:
-        # runs on the main thread; update progress until the background move finishes
+        # runs on the main thread; update the bar until the background move finishes
         if self.controller.is_moving:
-            self.progress_text.value = PROGRESS_LABEL + str(round(self.controller.progress * 100)) + "%"
+            progress = self.controller.progress
+            fill = progress if self._move_context == MoveContext.UP else 1.0 - progress
+            self._set_bar(fill)
+            self.progress_label.configure(text=f"{round(progress * 100)}%")
+            self._schedule_poll()
             return
-        self.app.cancel(self._poll_movement)
-        self.progress_text.value = ""
+        self.progress_label.configure(text="")
+        self._set_bar(1.0 if self._move_context == MoveContext.UP else 0.0)
         if self._move_context == MoveContext.UP:
-            self.up_button.enabled = False
-            self.down_button.enabled = True
-            info("Bett oben", "Sicherungsseile anbringen und Motoren ausschalten!")
+            self._set_enabled(self.up_button, False)
+            self._set_enabled(self.down_button, True)
+            messagebox.showinfo("Bett oben", "Sicherungsseile anbringen und Motoren ausschalten!")
         else:
-            self.up_button.enabled = True
-            self.down_button.enabled = False
+            self._set_enabled(self.up_button, True)
+            self._set_enabled(self.down_button, False)
         self._move_context = None
 
     def _correct(self, action) -> None:
@@ -112,7 +141,7 @@ class BedGui:
             window.destroy()
             return
         window = builder()
-        window.when_closed = lambda: self._on_window_closed(name)
+        window.protocol("WM_DELETE_WINDOW", lambda: self._on_window_closed(name))
         self._open_windows[name] = window
 
     def _on_window_closed(self, name: str) -> None:
@@ -124,58 +153,63 @@ class BedGui:
         self._toggle_window("settings", self._build_settings_window)
 
     def _build_settings_window(self):
-        window = Window(self.app, layout="grid", width="575", height="150", bg=BACKGROUND_COLOR, title="Settings")
-        Text(window, grid=[0, 0], align="right", text="total steps", font="Piboto")
-        Text(window, grid=[0, 1], align="right", text="speed pps", font="Piboto")
-        steps_slider = Slider(window, grid=[1, 0], align="left", height="40", width="488", start=STEPS_MIN, end=STEPS_MAX, command=self._on_steps_change)
-        steps_slider.value = self.controller.config.total_steps
-        steps_slider.text_size = 12
-        speed_slider = Slider(window, grid=[1, 1], align="left", height="40", width="488", start=SPEED_MIN, end=SPEED_MAX, command=self._on_speed_change)
-        speed_slider.value = self.controller.config.speed_pps
-        speed_slider.text_size = 12
+        window = ctk.CTkToplevel(self.app)
+        window.title("Settings")
+        window.geometry("560x160")
+        content = ctk.CTkFrame(window, fg_color="transparent")
+        content.pack(expand=True)
+        ctk.CTkLabel(content, text="total steps").grid(row=0, column=0, padx=12, pady=12, sticky="e")
+        steps_slider = ctk.CTkSlider(content, from_=STEPS_MIN, to=STEPS_MAX, width=300, command=self._on_steps_change)
+        steps_slider.set(self.controller.config.total_steps)
+        steps_slider.grid(row=0, column=1, padx=12, pady=12)
+        self._steps_value_label = ctk.CTkLabel(content, text=str(self.controller.config.total_steps), width=60)
+        self._steps_value_label.grid(row=0, column=2, padx=(4, 0))
+        ctk.CTkLabel(content, text="speed pps").grid(row=1, column=0, padx=12, pady=12, sticky="e")
+        speed_slider = ctk.CTkSlider(content, from_=SPEED_MIN, to=SPEED_MAX, width=300, command=self._on_speed_change)
+        speed_slider.set(self.controller.config.speed_pps)
+        speed_slider.grid(row=1, column=1, padx=12, pady=12)
+        self._speed_value_label = ctk.CTkLabel(content, text=str(int(self.controller.config.speed_pps)), width=60)
+        self._speed_value_label.grid(row=1, column=2, padx=(4, 0))
         return window
 
     def _on_steps_change(self, value) -> None:
         self.controller.config.total_steps = int(value)
         self.controller.config.save()
+        if self._steps_value_label is not None:
+            self._steps_value_label.configure(text=str(int(value)))
 
     def _on_speed_change(self, value) -> None:
         self.controller.config.speed_pps = float(value)
         self.controller.config.save()
+        if self._speed_value_label is not None:
+            self._speed_value_label.configure(text=str(int(value)))
 
     def _corrections_window(self) -> None:
         self._toggle_window("corrections", self._build_corrections_window)
 
     def _build_corrections_window(self):
-        text_size = 28
-        button_width = 10
-        button_height = 3
-        window = Window(self.app, layout="grid", width="590", height="350", bg=BACKGROUND_COLOR, title="Corrections")
-        Text(window, grid=[0, 0], text="  ")
-        Text(window, grid=[1, 0], text="back correction")
-        Text(window, grid=[2, 0], text="     ")
-        Text(window, grid=[3, 0], text="front correction")
-        Text(window, grid=[0, 1], text="  ")
-        back_up_button = PushButton(window, grid=[1, 1], width=button_width, height=button_height, command=lambda: self._correct(self.controller.correct_back_up), text="↑")
-        back_up_button.text_size = text_size
-        Text(window, grid=[2, 1], text="     ")
-        front_up_button = PushButton(window, grid=[3, 1], width=button_width, height=button_height, command=lambda: self._correct(self.controller.correct_front_up), text="↑")
-        front_up_button.text_size = text_size
-        Text(window, grid=[0, 2], text="  ")
-        back_down_button = PushButton(window, grid=[1, 2], width=button_width, height=button_height, command=lambda: self._correct(self.controller.correct_back_down), text="↓")
-        back_down_button.text_size = text_size
-        Text(window, grid=[2, 2], text="     ")
-        front_down_button = PushButton(window, grid=[3, 2], width=button_width, height=button_height, command=lambda: self._correct(self.controller.correct_front_down), text="↓")
-        front_down_button.text_size = text_size
+        window = ctk.CTkToplevel(self.app)
+        window.title("Corrections")
+        window.geometry("320x320")
+        content = ctk.CTkFrame(window, fg_color="transparent")
+        content.pack(expand=True)
+        ctk.CTkLabel(content, text="back").grid(row=0, column=0, padx=15, pady=(0, 8))
+        ctk.CTkLabel(content, text="front").grid(row=0, column=1, padx=15, pady=(0, 8))
+        ctk.CTkButton(content, text="↑", width=110, height=CORRECTION_BUTTON_HEIGHT, command=lambda: self._correct(self.controller.correct_back_up)).grid(row=1, column=0, padx=15, pady=8)
+        ctk.CTkButton(content, text="↑", width=110, height=CORRECTION_BUTTON_HEIGHT, command=lambda: self._correct(self.controller.correct_front_up)).grid(row=1, column=1, padx=15, pady=8)
+        ctk.CTkButton(content, text="↓", width=110, height=CORRECTION_BUTTON_HEIGHT, command=lambda: self._correct(self.controller.correct_back_down)).grid(row=2, column=0, padx=15, pady=8)
+        ctk.CTkButton(content, text="↓", width=110, height=CORRECTION_BUTTON_HEIGHT, command=lambda: self._correct(self.controller.correct_front_down)).grid(row=2, column=1, padx=15, pady=8)
         return window
 
     def _not_implemented_window(self) -> None:
         self._toggle_window("not_implemented", self._build_not_implemented_window)
 
     def _build_not_implemented_window(self):
-        window = Window(self.app, width="200", height="40", bg=BACKGROUND_COLOR, title="Not Implemented!")
-        Text(window, text="not implemented!")
+        window = ctk.CTkToplevel(self.app)
+        window.title("Not Implemented!")
+        window.geometry("260x110")
+        ctk.CTkLabel(window, text="not implemented!").pack(padx=20, pady=25)
         return window
 
     def display(self) -> None:
-        self.app.display()
+        self.app.mainloop()
