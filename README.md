@@ -51,6 +51,31 @@ python -m bedliftcontrol.main
 
 Or, after `pip install -e .`, simply run the `bedliftcontrol` command.
 
+## Autostart on the Raspberry Pi
+
+To launch BedLiftControl automatically when the Pi's desktop starts, install a
+`.desktop` entry into the user's autostart folder. Run this once on the Pi
+(after `pip install -e .`):
+
+```bash
+bedliftcontrol-autostart            # install
+bedliftcontrol-autostart --uninstall   # remove
+```
+
+This writes `~/.config/autostart/bedliftcontrol.desktop` pointing at the current
+Python interpreter, so it also works from inside a virtual environment.
+
+A reference entry is checked in at [deploy/bedliftcontrol.desktop](deploy/bedliftcontrol.desktop)
+for manual installation. The equivalent manual steps:
+
+1. `mkdir -p ~/.config/autostart`
+2. `nano ~/.config/autostart/bedliftcontrol.desktop`
+3. paste the contents of `deploy/bedliftcontrol.desktop` (adjust `Exec` to your setup)
+
+If the GPIO pins need root access, add your user to the `gpio` group
+(`sudo adduser $USER gpio`) rather than running the app with `sudo` — using
+`sudo` in the autostart entry would bypass your virtual environment.
+
 ## Tests
 
 Characterization tests pin the current behaviour so a refactor can be verified to

@@ -1,0 +1,15 @@
+# Reference autostart entry for the Raspberry Pi LXDE desktop.
+#
+# The recommended way to install this is the one-time command:
+#     bedliftcontrol-autostart
+# which generates a machine-correct copy (with the right Python path) in
+# ~/.config/autostart/. This file is kept for manual installation / reference.
+#
+# Adjust "Exec" to match how the package is installed on your Pi. If the package
+# is installed (pip install -e .), "python3 -m bedliftcontrol.main" works.
+[Desktop Entry]
+Type=Application
+Name=BedLiftControl
+Comment=Controlling bed motors and relays
+Exec=python3 -m bedliftcontrol.main
+Terminal=false

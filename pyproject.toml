@@ -15,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 bedliftcontrol = "bedliftcontrol.main:main"
+bedliftcontrol-autostart = "bedliftcontrol.autostart:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
