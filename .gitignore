@@ -23,3 +23,6 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# Runtime weather cache
+data/weather.json

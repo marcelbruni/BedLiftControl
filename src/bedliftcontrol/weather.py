@@ -1,0 +1,164 @@
+"""Fetch, cache and provide the current weather for the main panel.
+
+Location comes from the public IP (rough, city level); the forecast from Open-Meteo
+(free, no API key). The last result is cached to disk so something is still shown
+when the internet connection (phone tethering) drops.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import threading
+import urllib.request
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+WEATHER_FILE = str(Path(__file__).resolve().parents[2] / "data" / "weather.json")
+LOCATION_URL = "https://ipapi.co/json/"
+FORECAST_URL = (
+    "https://api.open-meteo.com/v1/forecast"
+    "?latitude={lat}&longitude={lon}&current_weather=true&timezone=auto"
+)
+REFRESH_INTERVAL_SECONDS = 1800
+HTTP_TIMEOUT = 8
+
+# Open-Meteo weather codes -> (description, emoji)
+WEATHER_CODES = {
+    0: ("Klar", "☀️"),
+    1: ("Überwiegend klar", "🌤️"),
+    2: ("Teilweise bewölkt", "⛅"),
+    3: ("Bewölkt", "☁️"),
+    45: ("Nebel", "🌫️"),
+    48: ("Nebel", "🌫️"),
+    51: ("Nieselregen", "🌦️"),
+    53: ("Nieselregen", "🌦️"),
+    55: ("Nieselregen", "🌦️"),
+    61: ("Regen", "🌧️"),
+    63: ("Regen", "🌧️"),
+    65: ("Starker Regen", "🌧️"),
+    71: ("Schnee", "❄️"),
+    73: ("Schnee", "❄️"),
+    75: ("Starker Schnee", "❄️"),
+    80: ("Schauer", "🌦️"),
+    81: ("Schauer", "🌦️"),
+    82: ("Heftige Schauer", "⛈️"),
+    95: ("Gewitter", "⛈️"),
+    96: ("Gewitter", "⛈️"),
+    99: ("Gewitter", "⛈️"),
+}
+
+
+def describe_weather_code(code: int) -> tuple[str, str]:
+    return WEATHER_CODES.get(code, ("Unbekannt", "❓"))
+
+
+@dataclass
+class Weather:
+    city: str
+    temperature: float
+    description: str
+    icon: str
+    fetched_at: str
+
+    def to_dict(self) -> dict:
+        return {
+            "city": self.city,
+            "temperature": self.temperature,
+            "description": self.description,
+            "icon": self.icon,
+            "fetched_at": self.fetched_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Weather":
+        return cls(
+            city=str(data["city"]),
+            temperature=float(data["temperature"]),
+            description=str(data["description"]),
+            icon=str(data["icon"]),
+            fetched_at=str(data["fetched_at"]),
+        )
+
+
+def _http_get_json(url: str) -> dict:
+    request = urllib.request.Request(url, headers={"User-Agent": "BedLiftControl/1.0"})
+    with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def fetch_location() -> tuple[float, float, str]:
+    data = _http_get_json(LOCATION_URL)
+    return float(data["latitude"]), float(data["longitude"]), str(data.get("city", ""))
+
+
+def fetch_weather(lat: float, lon: float, city: str) -> Weather:
+    data = _http_get_json(FORECAST_URL.format(lat=lat, lon=lon))
+    current = data["current_weather"]
+    description, icon = describe_weather_code(int(current["weathercode"]))
+    return Weather(
+        city=city,
+        temperature=float(current["temperature"]),
+        description=description,
+        icon=icon,
+        fetched_at=datetime.now().isoformat(timespec="minutes"),
+    )
+
+
+class WeatherService:
+    def __init__(self, path: str = WEATHER_FILE, refresh_interval: int = REFRESH_INTERVAL_SECONDS):
+        self.path = path
+        self.refresh_interval = refresh_interval
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self.current: Weather | None = self._load_cache()
+
+    def _load_cache(self) -> Weather | None:
+        file = Path(self.path)
+        if not file.exists():
+            return None
+        try:
+            return Weather.from_dict(json.loads(file.read_text(encoding="utf-8")))
+        except (ValueError, KeyError, OSError) as error:
+            logger.warning("Could not read weather cache %s (%s)", self.path, error)
+            return None
+
+    def _save_cache(self, weather: Weather) -> None:
+        target = Path(self.path)
+        temp = Path(str(target) + ".tmp")
+        temp.write_text(json.dumps(weather.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temp, target)
+
+    def refresh_once(self) -> bool:
+        try:
+            lat, lon, city = fetch_location()
+            weather = fetch_weather(lat, lon, city)
+        except Exception:  # network boundary: a failed fetch must never crash the app
+            logger.warning("Weather refresh failed", exc_info=True)
+            return False
+        with self._lock:
+            self.current = weather
+        self._save_cache(weather)
+        return True
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            self.refresh_once()
+            self._stop.wait(self.refresh_interval)
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2)

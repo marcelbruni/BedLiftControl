@@ -51,19 +51,26 @@ def controller():
 
 
 @pytest.fixture
-def gui(controller):
-    return BedGui(controller)
+def weather():
+    fake = MagicMock()
+    fake.current = None
+    return fake
+
+
+@pytest.fixture
+def gui(controller, weather):
+    return BedGui(controller, weather)
 
 
 class TestInitialState:
-    def test_bed_down_disables_down_button(self, controller):
+    def test_bed_down_disables_down_button(self, controller, weather):
         controller.config.bed_up = False
-        built = BedGui(controller)
+        built = BedGui(controller, weather)
         assert "disabled" in _states(built.down_button)
 
-    def test_bed_up_disables_up_button(self, controller):
+    def test_bed_up_disables_up_button(self, controller, weather):
         controller.config.bed_up = True
-        built = BedGui(controller)
+        built = BedGui(controller, weather)
         assert "disabled" in _states(built.up_button)
 
     def test_build_sets_initial_bar(self, gui):
@@ -177,3 +184,17 @@ class TestSettingsValues:
         gui._on_speed_change(1000)
         assert controller.config.speed_pps == 1000.0
         gui._speed_value_label.configure.assert_any_call(text="1000")
+
+
+class TestWeatherDisplay:
+    def test_updates_labels_from_current(self, gui, weather):
+        from bedliftcontrol.weather import Weather
+
+        weather.current = Weather("Thun", 21.4, "Klar", "☀️", "2026-09-03T11:00")
+        gui._refresh_weather()
+        gui.weather_city.configure.assert_any_call(text="Thun")
+        gui.weather_desc.configure.assert_any_call(text="Klar")
+
+    def test_handles_no_data(self, gui, weather):
+        weather.current = None
+        gui._refresh_weather()  # must not raise

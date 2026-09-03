@@ -7,6 +7,7 @@ from tkinter import messagebox
 import customtkinter as ctk
 
 from bedliftcontrol.controller import BedController
+from bedliftcontrol.weather import WeatherService
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ BUTTON_DISABLED_COLOR = "#333333"
 CORRECTION_BUTTON_HEIGHT = 90
 
 POLL_INTERVAL_MS = 100
+WEATHER_UI_REFRESH_MS = 5000
 STEPS_MIN = 27000
 STEPS_MAX = 30000
 SPEED_MIN = 200
@@ -31,8 +33,9 @@ class MoveContext(Enum):
 
 
 class BedGui:
-    def __init__(self, controller: BedController):
+    def __init__(self, controller: BedController, weather: WeatherService):
         self.controller = controller
+        self.weather = weather
         self._move_context: MoveContext | None = None
         self._open_windows: dict[str, object] = {}
         self._steps_value_label = None
@@ -62,6 +65,18 @@ class BedGui:
         self.progress_label = ctk.CTkLabel(left, text="", width=48)
         self.progress_label.pack(side="bottom", pady=4)
 
+        # center weather panel
+        center = ctk.CTkFrame(self.app, fg_color="transparent")
+        center.pack(side="left", fill="both", expand=True, padx=20, pady=20)
+        self.weather_city = ctk.CTkLabel(center, text="", font=ctk.CTkFont(size=22))
+        self.weather_city.pack(pady=(20, 0))
+        self.weather_temp = ctk.CTkLabel(center, text="", font=ctk.CTkFont(size=52))
+        self.weather_temp.pack(pady=6)
+        self.weather_desc = ctk.CTkLabel(center, text="", font=ctk.CTkFont(size=16))
+        self.weather_desc.pack()
+        self.weather_updated = ctk.CTkLabel(center, text="", font=ctk.CTkFont(size=11), text_color="#888888")
+        self.weather_updated.pack(pady=(8, 0))
+
         # right up/down control buttons
         right = ctk.CTkFrame(self.app)
         right.pack(side="right", fill="y", padx=10, pady=10)
@@ -77,6 +92,7 @@ class BedGui:
         else:
             self._set_enabled(self.down_button, False)
         self._set_bar(1.0 if self.controller.config.bed_up else 0.0)
+        self._refresh_weather()
 
     @staticmethod
     def _set_enabled(widget, enabled: bool) -> None:
@@ -210,6 +226,15 @@ class BedGui:
         window.geometry("260x110")
         ctk.CTkLabel(window, text="not implemented!").pack(padx=20, pady=25)
         return window
+
+    def _refresh_weather(self) -> None:
+        weather = self.weather.current
+        if weather is not None:
+            self.weather_city.configure(text=weather.city)
+            self.weather_temp.configure(text=f"{weather.icon} {round(weather.temperature)}°C")
+            self.weather_desc.configure(text=weather.description)
+            self.weather_updated.configure(text="Stand: " + weather.fetched_at.replace("T", " "))
+        self.app.after(WEATHER_UI_REFRESH_MS, self._refresh_weather)
 
     def display(self) -> None:
         self.app.mainloop()

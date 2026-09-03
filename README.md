@@ -124,3 +124,11 @@ All settings live in a single file, `data/config.json`:
 | `bed_up`      | Whether the bed is currently raised      |
 
 The file is written automatically when settings change or the bed is moved.
+
+## Weather
+
+When the Pi has internet (e.g. phone tethering while camping), the main panel shows
+the current weather. Location is derived from the public IP (rough, city level) and
+the forecast comes from [Open-Meteo](https://open-meteo.com) — both free and without
+an API key. The last result is cached to `data/weather.json`, so the weather stays
+visible when the connection drops. No configuration is required.

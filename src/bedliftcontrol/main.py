@@ -5,6 +5,7 @@ import logging
 from bedliftcontrol.config import Config
 from bedliftcontrol.controller import BedController
 from bedliftcontrol.gui import BedGui
+from bedliftcontrol.weather import WeatherService
 
 
 def main() -> None:
@@ -14,10 +15,13 @@ def main() -> None:
     )
     config = Config.load()
     controller = BedController(config)
+    weather = WeatherService()
+    gui = BedGui(controller, weather)
+    weather.start()
     try:
-        gui = BedGui(controller)
         gui.display()
     finally:
+        weather.stop()
         controller.cleanup()
 
 
