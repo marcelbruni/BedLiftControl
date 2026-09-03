@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 APPEARANCE_MODE = "dark"
 COLOR_THEME = "green"
 PROGRESS_COLOR = "#43a047"
+MIN_BAR_FRACTION = 0.12  # a stub of the bar stays visible even when the bed is up
 ARROW_FONT_SIZE = 96
 BUTTON_COLOR = "#2fa572"
 BUTTON_DISABLED_COLOR = "#333333"
@@ -64,11 +65,17 @@ class BedGui:
         ctk.CTkButton(bottom, text="↑↓", width=50, command=self._corrections_window).pack(side="left", padx=4, pady=6)
         ctk.CTkButton(bottom, text="230V on/off", width=120, command=self._not_implemented_window).pack(side="left", padx=4, pady=6)
 
-        # left vertical progress bar (fills from the bottom as the bed rises)
+        # left vertical bar: empty when the bed is up, fills from the top down as the
+        # bed is lowered (custom, since CTkProgressBar only ever fills from the bottom)
         left = ctk.CTkFrame(self.app)
         left.pack(side="left", fill="y", padx=10, pady=10)
-        self.progress_bar = ctk.CTkProgressBar(left, orientation="vertical", width=28, progress_color=PROGRESS_COLOR)
-        self.progress_bar.pack(side="top", fill="y", expand=True, pady=(6, 4))
+        self.progress_track = ctk.CTkFrame(left, width=28, fg_color="#3a3a3a", corner_radius=10)
+        self.progress_track.pack(side="top", fill="y", expand=True, padx=6, pady=(6, 4))
+        self.progress_track.pack_propagate(False)
+        self.progress_fill = ctk.CTkFrame(self.progress_track, fg_color=PROGRESS_COLOR, corner_radius=10)
+        # bed icon rides on the bottom edge of the green fill (moves with it automatically)
+        self.bed_icon = ctk.CTkLabel(self.progress_fill, text="🛏", font=ctk.CTkFont(family=_EMOJI_FONT, size=16), fg_color="transparent")
+        self.bed_icon.place(relx=0.5, rely=1.0, y=-4, anchor="s")
         self.progress_label = ctk.CTkLabel(left, text="", width=48)
         self.progress_label.pack(side="bottom", pady=4)
 
@@ -116,7 +123,13 @@ class BedGui:
         )
 
     def _set_bar(self, fill_level: float) -> None:
-        self.progress_bar.set(max(0.0, min(1.0, fill_level)))
+        # inverted + top-anchored: a stub stays visible when the bed is up, fills from
+        # the top down as the bed is lowered
+        fraction = 1.0 - max(0.0, min(1.0, fill_level))
+        # map [0,1] onto [MIN_BAR_FRACTION,1.0] so the fill keeps moving over the whole
+        # travel instead of freezing on the stub for the last few percent
+        relheight = MIN_BAR_FRACTION + fraction * (1.0 - MIN_BAR_FRACTION)
+        self.progress_fill.place(relx=0, rely=0, relwidth=1.0, relheight=relheight, anchor="nw")
 
     def _start_move(self, context: MoveContext, action) -> None:
         self._set_enabled(self.up_button, False)

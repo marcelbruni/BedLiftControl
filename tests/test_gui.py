@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from bedliftcontrol import gui as gui_module
-from bedliftcontrol.gui import BedGui, MoveContext
+from bedliftcontrol.gui import MIN_BAR_FRACTION, BedGui, MoveContext
 
 WIDGETS = [
     "CTk",
@@ -74,7 +74,7 @@ class TestInitialState:
         assert "disabled" in _states(built.up_button)
 
     def test_build_sets_initial_bar(self, gui):
-        gui.progress_bar.set.assert_called()
+        gui.progress_fill.place.assert_called()
 
 
 class TestOnUp:
@@ -126,17 +126,21 @@ class TestPollMovement:
         gui._move_context = MoveContext.UP
         gui._poll_movement()
         gui.progress_label.configure.assert_any_call(text="50%")
-        gui.progress_bar.set.assert_called()
+        gui.progress_fill.place.assert_called()
 
 
 class TestProgressBar:
-    def test_set_bar_clamps_high(self, gui):
-        gui._set_bar(2.0)
-        gui.progress_bar.set.assert_called_with(1.0)
+    def test_bar_keeps_a_stub_when_up(self, gui):
+        gui._set_bar(1.0)  # 1.0 == bed up
+        gui.progress_fill.place.assert_called_with(relx=0, rely=0, relwidth=1.0, relheight=MIN_BAR_FRACTION, anchor="nw")
 
-    def test_set_bar_clamps_low(self, gui):
-        gui._set_bar(-1.0)
-        gui.progress_bar.set.assert_called_with(0.0)
+    def test_bar_full_when_down(self, gui):
+        gui._set_bar(0.0)  # 0.0 == bed down
+        gui.progress_fill.place.assert_called_with(relx=0, rely=0, relwidth=1.0, relheight=1.0, anchor="nw")
+
+    def test_clamps_out_of_range(self, gui):
+        gui._set_bar(2.0)  # clamps to bed up -> stub
+        gui.progress_fill.place.assert_called_with(relx=0, rely=0, relwidth=1.0, relheight=MIN_BAR_FRACTION, anchor="nw")
 
 
 class TestCorrect:
