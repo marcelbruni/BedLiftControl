@@ -38,12 +38,24 @@ class TestDailyForecast:
             "weathercode": [0, 61],
             "temperature_2m_max": [22.0, 18.0],
             "temperature_2m_min": [12.0, 10.0],
+            "precipitation_probability_max": [10, 80],
         }
         daily = weather_module._parse_daily(data)
         assert len(daily) == 2
         assert daily[0].day == "Do"
         assert daily[0].temp_max == 22.0
+        assert daily[0].rain == 10
+        assert daily[1].rain == 80
         assert daily[1].icon
+
+    def test_parse_daily_without_rain_is_none(self):
+        data = {
+            "time": ["2026-09-03"],
+            "weathercode": [0],
+            "temperature_2m_max": [22.0],
+            "temperature_2m_min": [12.0],
+        }
+        assert weather_module._parse_daily(data)[0].rain is None
 
     def test_parse_daily_caps_at_seven(self):
         data = {

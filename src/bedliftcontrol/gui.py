@@ -21,6 +21,7 @@ CORRECTION_BUTTON_HEIGHT = 90
 
 POLL_INTERVAL_MS = 100
 WEATHER_UI_REFRESH_MS = 5000
+FORECAST_COL_WIDTH = 50
 STEPS_MIN = 27000
 STEPS_MAX = 30000
 SPEED_MIN = 200
@@ -40,8 +41,8 @@ class BedGui:
         self._open_windows: dict[str, object] = {}
         self._steps_value_label = None
         self._speed_value_label = None
-        self._forecast_columns = []
-        self._rendered_forecast_dates = None
+        self._forecast_labels = []
+        self._rendered_forecast_key = None
         self._build()
 
     def _build(self) -> None:
@@ -76,10 +77,11 @@ class BedGui:
         self.weather_temp.pack(pady=6)
         self.weather_desc = ctk.CTkLabel(center, text="", font=ctk.CTkFont(size=16))
         self.weather_desc.pack()
-        self.weather_updated = ctk.CTkLabel(center, text="", font=ctk.CTkFont(size=11), text_color="#888888")
-        self.weather_updated.pack(pady=(8, 0))
         self.forecast_frame = ctk.CTkFrame(center, fg_color="transparent")
         self.forecast_frame.pack(pady=(18, 0))
+        # last-updated line sits at the bottom of the center panel (above the menu bar)
+        self.weather_updated = ctk.CTkLabel(center, text="", font=ctk.CTkFont(size=11), text_color="#888888")
+        self.weather_updated.pack(side="bottom", pady=(0, 4))
 
         # right up/down control buttons
         right = ctk.CTkFrame(self.app)
@@ -242,21 +244,27 @@ class BedGui:
         self.app.after(WEATHER_UI_REFRESH_MS, self._refresh_weather)
 
     def _render_forecast(self, daily) -> None:
-        dates = [day.date for day in daily]
-        if dates == self._rendered_forecast_dates:
+        key = [(day.date, day.icon, day.temp_max, day.temp_min, day.rain) for day in daily]
+        if key == self._rendered_forecast_key:
             return
-        self._rendered_forecast_dates = dates
-        for column in self._forecast_columns:
-            column.destroy()
-        self._forecast_columns = []
+        self._rendered_forecast_key = key
+        for label in self._forecast_labels:
+            label.destroy()
+        self._forecast_labels = []
         for index, day in enumerate(daily):
-            column = ctk.CTkFrame(self.forecast_frame, fg_color="transparent")
-            column.grid(row=0, column=index, padx=8)
-            ctk.CTkLabel(column, text=day.day, font=ctk.CTkFont(size=13, weight="bold")).pack()
-            ctk.CTkLabel(column, text=day.icon, font=ctk.CTkFont(size=24)).pack()
-            ctk.CTkLabel(column, text=f"{round(day.temp_max)}°", font=ctk.CTkFont(size=13)).pack()
-            ctk.CTkLabel(column, text=f"{round(day.temp_min)}°", font=ctk.CTkFont(size=12), text_color="#888888").pack()
-            self._forecast_columns.append(column)
+            self.forecast_frame.grid_columnconfigure(index, weight=1, uniform="forecast", minsize=FORECAST_COL_WIDTH)
+            rows = [
+                (day.day, ctk.CTkFont(size=13, weight="bold"), None),
+                (day.icon, ctk.CTkFont(size=24), None),
+                (f"{round(day.temp_max)}°", ctk.CTkFont(size=13), None),
+                (f"{round(day.temp_min)}°", ctk.CTkFont(size=12), "#888888"),
+            ]
+            if day.rain is not None:
+                rows.append((f"💧 {day.rain}%", ctk.CTkFont(size=11), "#5aa0e0"))
+            for row, (text, font, color) in enumerate(rows):
+                label = ctk.CTkLabel(self.forecast_frame, text=text, anchor="center", font=font, text_color=color)
+                label.grid(row=row, column=index, padx=4, sticky="ew")
+                self._forecast_labels.append(label)
 
     def display(self) -> None:
         self.app.mainloop()

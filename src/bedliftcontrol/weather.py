@@ -23,7 +23,8 @@ LOCATION_URL = "https://ipapi.co/json/"
 FORECAST_URL = (
     "https://api.open-meteo.com/v1/forecast"
     "?latitude={lat}&longitude={lon}&current_weather=true"
-    "&daily=weathercode,temperature_2m_max,temperature_2m_min&timezone=auto"
+    "&daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
+    "&timezone=auto"
 )
 REFRESH_INTERVAL_SECONDS = 1800
 HTTP_TIMEOUT = 8
@@ -72,6 +73,7 @@ class DailyForecast:
     icon: str
     temp_max: float
     temp_min: float
+    rain: int | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -80,6 +82,7 @@ class DailyForecast:
             "icon": self.icon,
             "temp_max": self.temp_max,
             "temp_min": self.temp_min,
+            "rain": self.rain,
         }
 
     @classmethod
@@ -90,6 +93,7 @@ class DailyForecast:
             icon=str(data["icon"]),
             temp_max=float(data["temp_max"]),
             temp_min=float(data["temp_min"]),
+            rain=data.get("rain"),
         )
 
 
@@ -140,10 +144,12 @@ def _parse_daily(daily_data: dict) -> list:
     codes = daily_data.get("weathercode", [])
     highs = daily_data.get("temperature_2m_max", [])
     lows = daily_data.get("temperature_2m_min", [])
+    rains = daily_data.get("precipitation_probability_max", [])
     count = min(len(times), len(codes), len(highs), len(lows), 7)
     forecast = []
     for i in range(count):
         _, icon = describe_weather_code(int(codes[i]))
+        rain = int(rains[i]) if i < len(rains) and rains[i] is not None else None
         forecast.append(
             DailyForecast(
                 day=_weekday_label(times[i]),
@@ -151,6 +157,7 @@ def _parse_daily(daily_data: dict) -> list:
                 icon=icon,
                 temp_max=float(highs[i]),
                 temp_min=float(lows[i]),
+                rain=rain,
             )
         )
     return forecast

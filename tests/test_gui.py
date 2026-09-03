@@ -203,9 +203,9 @@ class TestWeatherDisplay:
         from bedliftcontrol.weather import DailyForecast, Weather
 
         daily = [
-            DailyForecast("Do", "2026-09-03", "☀️", 22.0, 12.0),
-            DailyForecast("Fr", "2026-09-04", "🌧️", 18.0, 10.0),
+            DailyForecast("Do", "2026-09-03", "☀️", 22.0, 12.0, rain=10),
+            DailyForecast("Fr", "2026-09-04", "🌧️", 18.0, 10.0, rain=80),
         ]
         weather.current = Weather("Thun", 21.0, "Klar", "☀️", "2026-09-03T11:00", daily=daily)
         gui._refresh_weather()
-        assert len(gui._forecast_columns) == 2
+        assert len(gui._forecast_labels) == 10  # 2 days x 5 rows (incl. rain)
