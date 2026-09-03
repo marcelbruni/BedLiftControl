@@ -3,7 +3,7 @@
 import json
 
 from bedliftcontrol import weather as weather_module
-from bedliftcontrol.weather import Weather, WeatherService, describe_weather_code
+from bedliftcontrol.weather import DailyForecast, Weather, WeatherService, describe_weather_code
 
 
 class TestDescribeWeatherCode:
@@ -20,6 +20,39 @@ class TestWeatherDataclass:
     def test_dict_roundtrip(self):
         weather = Weather("Thun", 21.0, "Klar", "☀️", "2026-09-03T11:00")
         assert Weather.from_dict(weather.to_dict()) == weather
+
+    def test_dict_roundtrip_with_daily(self):
+        daily = [DailyForecast("Do", "2026-09-03", "☀️", 22.0, 12.0)]
+        weather = Weather("Thun", 21.0, "Klar", "☀️", "2026-09-03T11:00", daily=daily)
+        assert Weather.from_dict(weather.to_dict()) == weather
+
+
+class TestDailyForecast:
+    def test_weekday_label(self):
+        # 2026-09-03 is a Thursday
+        assert weather_module._weekday_label("2026-09-03") == "Do"
+
+    def test_parse_daily_builds_list(self):
+        data = {
+            "time": ["2026-09-03", "2026-09-04"],
+            "weathercode": [0, 61],
+            "temperature_2m_max": [22.0, 18.0],
+            "temperature_2m_min": [12.0, 10.0],
+        }
+        daily = weather_module._parse_daily(data)
+        assert len(daily) == 2
+        assert daily[0].day == "Do"
+        assert daily[0].temp_max == 22.0
+        assert daily[1].icon
+
+    def test_parse_daily_caps_at_seven(self):
+        data = {
+            "time": [f"2026-09-{d:02d}" for d in range(1, 12)],
+            "weathercode": [0] * 11,
+            "temperature_2m_max": [20.0] * 11,
+            "temperature_2m_min": [10.0] * 11,
+        }
+        assert len(weather_module._parse_daily(data)) == 7
 
 
 class TestWeatherService:

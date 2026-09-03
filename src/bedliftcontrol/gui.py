@@ -40,6 +40,8 @@ class BedGui:
         self._open_windows: dict[str, object] = {}
         self._steps_value_label = None
         self._speed_value_label = None
+        self._forecast_columns = []
+        self._rendered_forecast_dates = None
         self._build()
 
     def _build(self) -> None:
@@ -76,6 +78,8 @@ class BedGui:
         self.weather_desc.pack()
         self.weather_updated = ctk.CTkLabel(center, text="", font=ctk.CTkFont(size=11), text_color="#888888")
         self.weather_updated.pack(pady=(8, 0))
+        self.forecast_frame = ctk.CTkFrame(center, fg_color="transparent")
+        self.forecast_frame.pack(pady=(18, 0))
 
         # right up/down control buttons
         right = ctk.CTkFrame(self.app)
@@ -234,7 +238,25 @@ class BedGui:
             self.weather_temp.configure(text=f"{weather.icon} {round(weather.temperature)}°C")
             self.weather_desc.configure(text=weather.description)
             self.weather_updated.configure(text="Stand: " + weather.fetched_at.replace("T", " "))
+            self._render_forecast(weather.daily)
         self.app.after(WEATHER_UI_REFRESH_MS, self._refresh_weather)
+
+    def _render_forecast(self, daily) -> None:
+        dates = [day.date for day in daily]
+        if dates == self._rendered_forecast_dates:
+            return
+        self._rendered_forecast_dates = dates
+        for column in self._forecast_columns:
+            column.destroy()
+        self._forecast_columns = []
+        for index, day in enumerate(daily):
+            column = ctk.CTkFrame(self.forecast_frame, fg_color="transparent")
+            column.grid(row=0, column=index, padx=8)
+            ctk.CTkLabel(column, text=day.day, font=ctk.CTkFont(size=13, weight="bold")).pack()
+            ctk.CTkLabel(column, text=day.icon, font=ctk.CTkFont(size=24)).pack()
+            ctk.CTkLabel(column, text=f"{round(day.temp_max)}°", font=ctk.CTkFont(size=13)).pack()
+            ctk.CTkLabel(column, text=f"{round(day.temp_min)}°", font=ctk.CTkFont(size=12), text_color="#888888").pack()
+            self._forecast_columns.append(column)
 
     def display(self) -> None:
         self.app.mainloop()

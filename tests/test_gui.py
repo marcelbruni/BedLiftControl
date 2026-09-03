@@ -198,3 +198,14 @@ class TestWeatherDisplay:
     def test_handles_no_data(self, gui, weather):
         weather.current = None
         gui._refresh_weather()  # must not raise
+
+    def test_renders_forecast_columns(self, gui, weather):
+        from bedliftcontrol.weather import DailyForecast, Weather
+
+        daily = [
+            DailyForecast("Do", "2026-09-03", "☀️", 22.0, 12.0),
+            DailyForecast("Fr", "2026-09-04", "🌧️", 18.0, 10.0),
+        ]
+        weather.current = Weather("Thun", 21.0, "Klar", "☀️", "2026-09-03T11:00", daily=daily)
+        gui._refresh_weather()
+        assert len(gui._forecast_columns) == 2

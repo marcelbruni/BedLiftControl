@@ -12,7 +12,7 @@ import logging
 import os
 import threading
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -22,7 +22,8 @@ WEATHER_FILE = str(Path(__file__).resolve().parents[2] / "data" / "weather.json"
 LOCATION_URL = "https://ipapi.co/json/"
 FORECAST_URL = (
     "https://api.open-meteo.com/v1/forecast"
-    "?latitude={lat}&longitude={lon}&current_weather=true&timezone=auto"
+    "?latitude={lat}&longitude={lon}&current_weather=true"
+    "&daily=weathercode,temperature_2m_max,temperature_2m_min&timezone=auto"
 )
 REFRESH_INTERVAL_SECONDS = 1800
 HTTP_TIMEOUT = 8
@@ -57,6 +58,41 @@ def describe_weather_code(code: int) -> tuple[str, str]:
     return WEATHER_CODES.get(code, ("Unbekannt", "❓"))
 
 
+WEEKDAY_LABELS = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+
+
+def _weekday_label(date_iso: str) -> str:
+    return WEEKDAY_LABELS[datetime.strptime(date_iso, "%Y-%m-%d").weekday()]
+
+
+@dataclass
+class DailyForecast:
+    day: str
+    date: str
+    icon: str
+    temp_max: float
+    temp_min: float
+
+    def to_dict(self) -> dict:
+        return {
+            "day": self.day,
+            "date": self.date,
+            "icon": self.icon,
+            "temp_max": self.temp_max,
+            "temp_min": self.temp_min,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "DailyForecast":
+        return cls(
+            day=str(data["day"]),
+            date=str(data["date"]),
+            icon=str(data["icon"]),
+            temp_max=float(data["temp_max"]),
+            temp_min=float(data["temp_min"]),
+        )
+
+
 @dataclass
 class Weather:
     city: str
@@ -64,6 +100,7 @@ class Weather:
     description: str
     icon: str
     fetched_at: str
+    daily: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -72,6 +109,7 @@ class Weather:
             "description": self.description,
             "icon": self.icon,
             "fetched_at": self.fetched_at,
+            "daily": [day.to_dict() for day in self.daily],
         }
 
     @classmethod
@@ -82,6 +120,7 @@ class Weather:
             description=str(data["description"]),
             icon=str(data["icon"]),
             fetched_at=str(data["fetched_at"]),
+            daily=[DailyForecast.from_dict(day) for day in data.get("daily", [])],
         )
 
 
@@ -96,6 +135,27 @@ def fetch_location() -> tuple[float, float, str]:
     return float(data["latitude"]), float(data["longitude"]), str(data.get("city", ""))
 
 
+def _parse_daily(daily_data: dict) -> list:
+    times = daily_data.get("time", [])
+    codes = daily_data.get("weathercode", [])
+    highs = daily_data.get("temperature_2m_max", [])
+    lows = daily_data.get("temperature_2m_min", [])
+    count = min(len(times), len(codes), len(highs), len(lows), 7)
+    forecast = []
+    for i in range(count):
+        _, icon = describe_weather_code(int(codes[i]))
+        forecast.append(
+            DailyForecast(
+                day=_weekday_label(times[i]),
+                date=times[i],
+                icon=icon,
+                temp_max=float(highs[i]),
+                temp_min=float(lows[i]),
+            )
+        )
+    return forecast
+
+
 def fetch_weather(lat: float, lon: float, city: str) -> Weather:
     data = _http_get_json(FORECAST_URL.format(lat=lat, lon=lon))
     current = data["current_weather"]
@@ -106,6 +166,7 @@ def fetch_weather(lat: float, lon: float, city: str) -> Weather:
         description=description,
         icon=icon,
         fetched_at=datetime.now().isoformat(timespec="minutes"),
+        daily=_parse_daily(data.get("daily", {})),
     )
 
 
