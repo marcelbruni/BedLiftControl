@@ -1,6 +1,7 @@
 """CustomTkinter user interface for the bed lift. Delegates all motion to BedController."""
 
 import logging
+import sys
 from enum import Enum
 from tkinter import messagebox
 
@@ -22,6 +23,9 @@ CORRECTION_BUTTON_HEIGHT = 90
 POLL_INTERVAL_MS = 100
 WEATHER_UI_REFRESH_MS = 5000
 FORECAST_COL_WIDTH = 50
+# Emojis must be drawn with an emoji font, otherwise Tk measures them with the
+# default (Roboto) font and renders them wider, which shifts them off-center.
+_EMOJI_FONT = "Segoe UI Emoji" if sys.platform.startswith("win") else "Noto Color Emoji"
 STEPS_MIN = 27000
 STEPS_MAX = 30000
 SPEED_MIN = 200
@@ -70,11 +74,15 @@ class BedGui:
 
         # center weather panel
         center = ctk.CTkFrame(self.app, fg_color="transparent")
-        center.pack(side="left", fill="both", expand=True, padx=20, pady=20)
+        center.pack(side="left", fill="both", expand=True, padx=20, pady=(20, 0))
         self.weather_city = ctk.CTkLabel(center, text="", font=ctk.CTkFont(size=22))
         self.weather_city.pack(pady=(20, 0))
-        self.weather_temp = ctk.CTkLabel(center, text="", font=ctk.CTkFont(size=52))
-        self.weather_temp.pack(pady=6)
+        weather_row = ctk.CTkFrame(center, fg_color="transparent")
+        weather_row.pack(pady=6)
+        self.weather_icon = ctk.CTkLabel(weather_row, text="", font=ctk.CTkFont(family=_EMOJI_FONT, size=52))
+        self.weather_icon.pack(side="left", padx=(0, 20))
+        self.weather_temp = ctk.CTkLabel(weather_row, text="", font=ctk.CTkFont(size=52))
+        self.weather_temp.pack(side="left", padx=(20, 0))
         self.weather_desc = ctk.CTkLabel(center, text="", font=ctk.CTkFont(size=16))
         self.weather_desc.pack()
         self.forecast_frame = ctk.CTkFrame(center, fg_color="transparent")
@@ -237,7 +245,8 @@ class BedGui:
         weather = self.weather.current
         if weather is not None:
             self.weather_city.configure(text=weather.city)
-            self.weather_temp.configure(text=f"{weather.icon} {round(weather.temperature)}°C")
+            self.weather_icon.configure(text=weather.icon)
+            self.weather_temp.configure(text=f"{round(weather.temperature)}°C")
             self.weather_desc.configure(text=weather.description)
             self.weather_updated.configure(text="Stand: " + weather.fetched_at.replace("T", " "))
             self._render_forecast(weather.daily)
@@ -255,15 +264,15 @@ class BedGui:
             self.forecast_frame.grid_columnconfigure(index, weight=1, uniform="forecast", minsize=FORECAST_COL_WIDTH)
             rows = [
                 (day.day, ctk.CTkFont(size=13, weight="bold"), None),
-                (day.icon, ctk.CTkFont(size=24), None),
-                (f"{round(day.temp_max)}°", ctk.CTkFont(size=13), None),
+                (day.icon, ctk.CTkFont(family=_EMOJI_FONT, size=24), None),
+                (f"{round(day.temp_max)}°", ctk.CTkFont(size=12), None),
                 (f"{round(day.temp_min)}°", ctk.CTkFont(size=12), "#888888"),
             ]
             if day.rain is not None:
-                rows.append((f"💧 {day.rain}%", ctk.CTkFont(size=11), "#5aa0e0"))
+                rows.append((f"💧 {day.rain}%", ctk.CTkFont(size=12), "#5aa0e0"))
             for row, (text, font, color) in enumerate(rows):
                 label = ctk.CTkLabel(self.forecast_frame, text=text, anchor="center", font=font, text_color=color)
-                label.grid(row=row, column=index, padx=4, sticky="ew")
+                label.grid(row=row, column=index, padx=8, pady=1, sticky="ew")
                 self._forecast_labels.append(label)
 
     def display(self) -> None:
