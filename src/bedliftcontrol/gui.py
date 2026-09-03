@@ -78,7 +78,7 @@ class BedGui:
         self.weather_city = ctk.CTkLabel(center, text="", font=ctk.CTkFont(size=22))
         self.weather_city.pack(pady=(20, 0))
         weather_row = ctk.CTkFrame(center, fg_color="transparent")
-        weather_row.pack(pady=6)
+        weather_row.pack(pady=6, padx=(40, 0))  # left pad shifts the centred group ~20px right
         self.weather_icon = ctk.CTkLabel(weather_row, text="", font=ctk.CTkFont(family=_EMOJI_FONT, size=52))
         self.weather_icon.pack(side="left", padx=(0, 20))
         self.weather_temp = ctk.CTkLabel(weather_row, text="", font=ctk.CTkFont(size=52))
