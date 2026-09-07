@@ -35,6 +35,10 @@ BedLiftControl/
 
 ## Setup
 
+> Für die Installation auf dem Raspberry Pi (inkl. Autostart und Updates)
+> gibt es eine ausführliche Schritt-für-Schritt-Anleitung in
+> [DEPLOYMENT.md](DEPLOYMENT.md).
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate      # on the Raspberry Pi
