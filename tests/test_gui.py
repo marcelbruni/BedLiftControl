@@ -271,3 +271,71 @@ class TestPanelSeparation:
         monkeypatch.setattr(gui, "_render_forecast", lambda d: seen.append("forecast"))
         gui._refresh_weather()
         assert seen == ["current", "forecast"]
+
+
+class TestClock:
+    """The clock is its own block: it must tick regardless of the weather."""
+
+    def test_shows_date_and_time(self, gui, monkeypatch):
+        from datetime import datetime
+
+        from bedliftcontrol import gui as module
+
+        monkeypatch.setattr(module.clock, "now", lambda: datetime(2026, 9, 8, 12, 8))
+        gui._clock_text = None
+        gui._update_clock()
+        gui.clock_date.configure.assert_any_call(text="Dienstag, 8. September 2026")
+        gui.clock_time.configure.assert_any_call(text="12:08")
+
+    def test_keeps_ticking_without_a_weather_reading(self, gui, weather, monkeypatch):
+        """No internet means _refresh_weather returns early - the clock must not care."""
+        from datetime import datetime
+
+        from bedliftcontrol import gui as module
+
+        weather.current = None
+        gui._refresh_weather()
+        monkeypatch.setattr(module.clock, "now", lambda: datetime(2026, 9, 8, 12, 8))
+        gui._clock_text = None
+        gui._update_clock()
+        gui.clock_time.configure.assert_any_call(text="12:08")
+
+    def test_does_not_redraw_within_the_same_minute(self, gui, monkeypatch):
+        from datetime import datetime
+
+        from bedliftcontrol import gui as module
+
+        monkeypatch.setattr(module.clock, "now", lambda: datetime(2026, 9, 8, 12, 8, 1))
+        gui._clock_text = None
+        gui._update_clock()
+        gui.clock_time.configure.reset_mock()
+        monkeypatch.setattr(module.clock, "now", lambda: datetime(2026, 9, 8, 12, 8, 59))
+        gui._update_clock()
+        assert not gui.clock_time.configure.called
+
+    def test_redraws_when_the_minute_flips(self, gui, monkeypatch):
+        from datetime import datetime
+
+        from bedliftcontrol import gui as module
+
+        monkeypatch.setattr(module.clock, "now", lambda: datetime(2026, 9, 8, 12, 8))
+        gui._clock_text = None
+        gui._update_clock()
+        gui.clock_time.configure.reset_mock()
+        monkeypatch.setattr(module.clock, "now", lambda: datetime(2026, 9, 8, 12, 9))
+        gui._update_clock()
+        gui.clock_time.configure.assert_any_call(text="12:09")
+
+    def test_clock_does_not_touch_the_weather_blocks(self, gui, monkeypatch):
+        from datetime import datetime
+
+        from bedliftcontrol import gui as module
+
+        monkeypatch.setattr(module.clock, "now", lambda: datetime(2026, 9, 8, 12, 8))
+        gui.weather_city.configure.reset_mock()
+        called = []
+        monkeypatch.setattr(gui, "_render_forecast", lambda daily: called.append(daily))
+        gui._clock_text = None
+        gui._update_clock()
+        assert not gui.weather_city.configure.called
+        assert not called

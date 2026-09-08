@@ -7,7 +7,7 @@ from tkinter import messagebox
 
 import customtkinter as ctk
 
-from bedliftcontrol import icons
+from bedliftcontrol import clock, icons
 from bedliftcontrol.controller import BedController
 from bedliftcontrol.weather import WEATHER_CODES, WeatherService
 
@@ -27,6 +27,7 @@ CORRECTION_BUTTON_HEIGHT = 90
 
 POLL_INTERVAL_MS = 100
 WEATHER_UI_REFRESH_MS = 5000
+CLOCK_TICK_MS = 1000  # the display shows minutes; ticking every second keeps the flip prompt
 FORECAST_COL_WIDTH = 50
 # Emojis must be drawn with an emoji font, otherwise Tk measures them with the
 # default (Roboto) font and renders them wider, which shifts them off-center.
@@ -69,6 +70,7 @@ class BedGui:
         self.weather = weather
         self._move_context: MoveContext | None = None
         self._bar_fill_level = 0.0
+        self._clock_text = None
         self._open_windows: dict[str, object] = {}
         self._steps_value_label = None
         self._speed_value_label = None
@@ -91,6 +93,7 @@ class BedGui:
         ctk.CTkButton(bottom, text="↑↓", width=50, command=self._corrections_window).pack(side="left", padx=4, pady=6)
         ctk.CTkButton(bottom, text="230V on/off", width=120, command=self._not_implemented_window).pack(side="left", padx=4, pady=6)
         ctk.CTkButton(bottom, text="Wetter-Icons", width=120, command=self._weather_icons_window).pack(side="left", padx=4, pady=6)
+        self._build_clock_panel(bottom)
 
         # left vertical bar: empty when the bed is up, fills from the top down as the
         # bed is lowered (custom, since CTkProgressBar only ever fills from the bottom)
@@ -134,6 +137,7 @@ class BedGui:
         else:
             self._set_enabled(self.down_button, False)
         self._set_bar(1.0 if self.controller.config.bed_up else 0.0)
+        self._update_clock()
         self._refresh_weather()
 
     @staticmethod
@@ -325,6 +329,26 @@ class BedGui:
             self._render_forecast(weather.daily)
             self.weather_updated.configure(text="Stand: " + weather.fetched_at.replace("T", " "))
         self.app.after(WEATHER_UI_REFRESH_MS, self._refresh_weather)
+
+    # --- block 3: clock ----------------------------------------------------
+    # Owns self.clock_date and self.clock_time, driven by its own timer. It does not go
+    # through _refresh_weather on purpose - that one returns early without a reading,
+    # which is exactly when the clock still has to tick.
+
+    def _build_clock_panel(self, parent) -> None:
+        self.clock_time = ctk.CTkLabel(parent, text="", font=ctk.CTkFont(size=20, weight="bold"))
+        self.clock_time.pack(side="right", padx=(6, 12))
+        self.clock_date = ctk.CTkLabel(parent, text="", font=ctk.CTkFont(size=13), text_color="#888888")
+        self.clock_date.pack(side="right")
+
+    def _update_clock(self) -> None:
+        moment = clock.now()
+        text = (clock.format_date(moment), clock.format_time(moment))
+        if text != self._clock_text:  # a minute lasts 60 ticks, only redraw on a change
+            self._clock_text = text
+            self.clock_date.configure(text=text[0])
+            self.clock_time.configure(text=text[1])
+        self.app.after(CLOCK_TICK_MS, self._update_clock)
 
     # --- block 1: current conditions ---------------------------------------
     # Owns self.current_frame and nothing outside it, so it can be rebuilt, restyled or
