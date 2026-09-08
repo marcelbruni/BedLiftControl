@@ -55,7 +55,7 @@ WEATHER_CODES = {
     71: ("Leichter Schneefall",               "snow-1"),
     73: ("Mässiger Schneefall",               "snow-2"),
     75: ("Starker Schneefall",                "snow-3"),
-    77: ("Schneegriesel",                     "flake"),
+    77: ("Schneegriesel",                     "grains"),
     80: ("Leichte Regenschauer",              "shower-1"),
     81: ("Mässige Regenschauer",              "shower-2"),
     82: ("Heftige Regenschauer",              "shower-3"),

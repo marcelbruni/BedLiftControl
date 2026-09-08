@@ -7,7 +7,7 @@ counts rather than eyeballed.
 
 import pytest
 
-from bedliftcontrol.icons import ICON_SPECS, draw_icon
+from bedliftcontrol.icons import ICON_SPECS, _spread, draw_icon
 
 SIZE = 40
 
@@ -121,10 +121,21 @@ class TestIntensityLadders:
             render("thunder-hail-2").ovals_colored(HAIL_COLOR)
         )
 
-    def test_snow_grains_are_lighter_than_heavy_snowfall(self):
+    def test_snow_grains_are_dots_not_flakes(self):
+        """Grains must read lighter than snowfall: many tiny dots, no six-spoke stars."""
         from bedliftcontrol.icons import SNOW_COLOR
 
-        assert len(render("flake").lines_colored(SNOW_COLOR)) < len(render("snow-3").lines_colored(SNOW_COLOR))
+        grains = render("grains")
+        assert not grains.lines_colored(SNOW_COLOR), "grains must not draw flake spokes"
+        assert len(grains.ovals_colored(SNOW_COLOR)) == 5
+
+    def test_a_grain_is_smaller_than_a_flake(self):
+        from bedliftcontrol.icons import SNOW_COLOR
+
+        (gx0, gy0, gx1, _), _ = render("grains").ovals_colored(SNOW_COLOR)[0]
+        flake_spokes = render("snow-3").lines_colored(SNOW_COLOR)
+        flake_width = max(abs(line[0][2] - line[0][0]) for line in flake_spokes)
+        assert gx1 - gx0 < flake_width
 
 
 class TestIconParts:
@@ -156,3 +167,54 @@ class TestIconParts:
         for (x0, y0, x1, y1), _ in lines:
             assert y0 == y1, "fog lines must be horizontal"
             assert x1 > x0
+
+
+class TestSpread:
+    """Mark placement. Two marks used to be pushed to the left and right edge."""
+
+    def test_single_mark_is_centred(self):
+        assert _spread(1) == pytest.approx([0.51])
+
+    def test_two_marks_sit_close_to_the_centre(self):
+        left, right = _spread(2)
+        assert right - left == pytest.approx(0.29), "two marks must keep the three-mark gap"
+        assert (left + right) / 2 == pytest.approx(0.51), "the pair must be centred"
+
+    @pytest.mark.parametrize(
+        "count, expected",
+        [(3, [0.22, 0.51, 0.80]), (4, [0.22, 0.4133333, 0.6066666, 0.80])],
+    )
+    def test_three_and_four_marks_are_unchanged(self, count, expected):
+        """These layouts were signed off, the gap cap must not move them."""
+        assert _spread(count) == pytest.approx(expected)
+
+    def test_hail_stays_clear_of_the_bolt(self):
+        """The bolt occupies x 0.36..0.62, so hail grains must not be centred there."""
+        for x in _spread(2, gap=1.0):
+            assert not 0.36 <= x <= 0.62
+
+
+class TestIceClearance:
+    """The ice marker sits bottom right; precipitation marks must not run into it."""
+
+    ICE_LEFT_EDGE = 0.71 * SIZE
+
+    def test_drizzle_with_ice_keeps_its_dots_clear(self):
+        from bedliftcontrol.icons import RAIN_COLOR
+
+        for (_, _, x1, _), _ in render("drizzle-ice-2").ovals_colored(RAIN_COLOR):
+            assert x1 < self.ICE_LEFT_EDGE, "a dot reaches into the ice marker"
+
+    def test_the_shift_only_moves_the_marked_icon(self):
+        """Only drizzle-ice-2 is nudged; the approved layouts must stay put."""
+        from bedliftcontrol.icons import ICON_SPECS
+
+        shifted = {key for key, spec in ICON_SPECS.items() if spec.mark_shift}
+        assert shifted == {"drizzle-ice-2"}
+
+    def test_shifted_dots_move_left_not_right(self):
+        from bedliftcontrol.icons import RAIN_COLOR
+
+        plain = [oval[0][0] for oval in render("drizzle-2").ovals_colored(RAIN_COLOR)]
+        shifted = [oval[0][0] for oval in render("drizzle-ice-2").ovals_colored(RAIN_COLOR)]
+        assert all(new < old for new, old in zip(shifted, plain))

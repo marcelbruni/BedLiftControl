@@ -38,9 +38,10 @@ class IconSpec:
     dots: int = 0       # drizzle: small dots
     flakes: int = 0     # snow: six-spoke stars
     hail: int = 0       # hail: small circles
+    grains: int = 0     # snow grains: many tiny dots, lighter than flakes
     bolt: bool = False
     ice: bool = False
-    bare_flake: bool = False
+    mark_shift: float = 0.0  # nudge the precipitation marks aside from the ice marker
 
 
 # One icon per weather code. Intensity is simply the number of drops/dots/flakes/grains.
@@ -55,7 +56,7 @@ ICON_SPECS = {
     "drizzle-2": IconSpec(dots=2),
     "drizzle-3": IconSpec(dots=3),
     "drizzle-ice-1": IconSpec(dots=1, ice=True),
-    "drizzle-ice-2": IconSpec(dots=2, ice=True),
+    "drizzle-ice-2": IconSpec(dots=2, ice=True, mark_shift=-0.10),
     "rain-1": IconSpec(drops=1),
     "rain-2": IconSpec(drops=2),
     "rain-3": IconSpec(drops=3),
@@ -64,7 +65,7 @@ ICON_SPECS = {
     "snow-1": IconSpec(flakes=1),
     "snow-2": IconSpec(flakes=2),
     "snow-3": IconSpec(flakes=3),
-    "flake": IconSpec(cloud=False, bare_flake=True),
+    "grains": IconSpec(grains=5),
     "shower-1": IconSpec(sun=True, drops=1),
     "shower-2": IconSpec(sun=True, drops=2),
     "shower-3": IconSpec(sun=True, drops=3),
@@ -84,6 +85,7 @@ _CLOUD_BOX_SMALL = (0.40, 0.42, 0.94, 0.68)
 _CLOUD_BOX_NO_SUN = (0.10, 0.28, 0.90, 0.66)
 _PRECIP_Y = 0.74
 _PRECIP_SPAN = (0.22, 0.80)
+_PRECIP_GAP = 0.29  # cap, so two marks sit as tight as three instead of at the edges
 _ICE_CENTER = (0.84, 0.84, 0.13)
 
 
@@ -125,33 +127,51 @@ def _cloud(canvas, size, box):
                             fill=CLOUD_COLOR, outline="")
 
 
-def _spread(count):
-    """Evenly spaced x positions for `count` precipitation marks."""
+def _spread(count, gap=_PRECIP_GAP):
+    """Centred x positions for `count` precipitation marks.
+
+    The marks keep a fixed gap and are centred as a group, rather than being stretched
+    across the whole span - two marks pushed to the left and right edge read as a gap in
+    the icon instead of as "moderate". The gap still shrinks once the marks would not
+    fit, so three and four marks are laid out exactly as before.
+    """
     low, high = _PRECIP_SPAN
-    if count == 1:
-        return [(low + high) / 2]
-    step = (high - low) / (count - 1)
-    return [low + step * index for index in range(count)]
+    center = (low + high) / 2
+    if count <= 1:
+        return [center]
+    gap = min(gap, (high - low) / (count - 1))
+    start = center - gap * (count - 1) / 2
+    return [start + gap * index for index in range(count)]
 
 
-def _drops(canvas, size, count):
+def _drops(canvas, size, count, shift=0.0):
     for x in _spread(count):
-        _line(canvas, size, x + 0.03, _PRECIP_Y, x - 0.03, _PRECIP_Y + 0.19, RAIN_COLOR, 0.055)
+        _line(canvas, size, x + shift + 0.03, _PRECIP_Y, x + shift - 0.03,
+              _PRECIP_Y + 0.19, RAIN_COLOR, 0.055)
 
 
-def _dots(canvas, size, count):
+def _dots(canvas, size, count, shift=0.0):
     for x in _spread(count):
-        _oval(canvas, size, x, _PRECIP_Y + 0.09, 0.043, RAIN_COLOR)
+        _oval(canvas, size, x + shift, _PRECIP_Y + 0.09, 0.043, RAIN_COLOR)
 
 
-def _flakes(canvas, size, count):
+def _flakes(canvas, size, count, shift=0.0):
     for x in _spread(count):
-        _spoked(canvas, size, x, _PRECIP_Y + 0.09, 0.085, SNOW_COLOR, 0.038)
+        _spoked(canvas, size, x + shift, _PRECIP_Y + 0.09, 0.085, SNOW_COLOR, 0.038)
+
+
+def _grains(canvas, size, count):
+    """Snow grains: many tiny dots, staggered. Reads as granular and stays visually
+    lighter than the flakes of an actual snowfall icon."""
+    for index, x in enumerate(_spread(count, gap=1.0)):
+        y = _PRECIP_Y + (0.04 if index % 2 == 0 else 0.16)
+        _oval(canvas, size, x, y, 0.034, SNOW_COLOR)
 
 
 def _hail(canvas, size, count):
-    # staggered in two rows, so "more hail" reads without the icon getting wider
-    for index, x in enumerate(_spread(count)):
+    # staggered in two rows, so "more hail" reads without the icon getting wider, and
+    # spread over the full span so the grains stay clear of the bolt in the middle
+    for index, x in enumerate(_spread(count, gap=1.0)):
         y = _PRECIP_Y + (0.02 if index % 2 == 0 else 0.16)
         _oval(canvas, size, x, y, 0.048, HAIL_COLOR)
 
@@ -199,13 +219,13 @@ def draw_icon(canvas, key, size) -> None:
     if spec.fog_lines:
         _fog(canvas, size, spec.fog_lines)
     if spec.drops:
-        _drops(canvas, size, spec.drops)
+        _drops(canvas, size, spec.drops, spec.mark_shift)
     if spec.dots:
-        _dots(canvas, size, spec.dots)
+        _dots(canvas, size, spec.dots, spec.mark_shift)
     if spec.flakes:
-        _flakes(canvas, size, spec.flakes)
-    if spec.bare_flake:
-        _spoked(canvas, size, 0.5, 0.52, 0.30, SNOW_COLOR, 0.055)
+        _flakes(canvas, size, spec.flakes, spec.mark_shift)
+    if spec.grains:
+        _grains(canvas, size, spec.grains)
     if spec.hail:
         _hail(canvas, size, spec.hail)
     if spec.bolt:
