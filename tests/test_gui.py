@@ -723,3 +723,137 @@ class TestEndStopPrompts:
         gui._move_context = MoveContext.DOWN
         gui._poll_movement()
         assert box.showinfo.call_count <= 1
+
+
+class TestCorrectionsButtonGating:
+    """Corrections are judged by eye against an end stop, so the window may only be
+    opened while the bed is parked fully up or fully down and nothing is moving."""
+
+    def test_enabled_at_the_bottom(self, controller, weather):
+        controller.at_bottom = True
+        controller.at_top = False
+        built = BedGui(controller, weather)
+        assert _states(built.corrections_button)[-1] == "normal"
+
+    def test_enabled_at_the_top(self, controller, weather):
+        controller.at_bottom = False
+        controller.at_top = True
+        controller.position_fraction = 1.0
+        built = BedGui(controller, weather)
+        assert _states(built.corrections_button)[-1] == "normal"
+
+    def test_disabled_at_a_position_in_between(self, controller, weather):
+        """That is the state a stop leaves behind."""
+        controller.at_bottom = False
+        controller.at_top = False
+        controller.position_fraction = 0.4
+        built = BedGui(controller, weather)
+        assert _states(built.corrections_button)[-1] == "disabled"
+
+    def test_disabled_while_moving(self, controller, weather):
+        controller.at_bottom = True
+        controller.is_moving = True
+        built = BedGui(controller, weather)
+        assert _states(built.corrections_button)[-1] == "disabled"
+
+    def test_disabled_the_moment_a_move_starts(self, gui, controller):
+        gui.corrections_button.configure.reset_mock()
+        gui._on_up()
+        assert "disabled" in _states(gui.corrections_button)
+
+    def test_enabled_again_once_an_end_stop_is_reached(self, gui, controller):
+        gui._on_up()
+        controller.is_moving = False
+        controller.at_top = True
+        controller.at_bottom = False
+        gui.corrections_button.configure.reset_mock()
+        gui._poll_movement()
+        assert _states(gui.corrections_button)[-1] == "normal"
+
+    def test_stays_disabled_after_a_stop_in_between(self, gui, controller):
+        gui._on_up()
+        controller.is_moving = False
+        controller.at_top = False
+        controller.at_bottom = False
+        gui.corrections_button.configure.reset_mock()
+        gui._poll_movement()
+        assert _states(gui.corrections_button)[-1] == "disabled"
+
+    def test_an_open_correction_window_is_closed_when_a_move_starts(self, gui, controller):
+        gui._corrections_window()
+        assert "corrections" in gui._open_windows
+        gui._on_up()
+        assert "corrections" not in gui._open_windows
+
+    def test_closing_it_is_harmless_when_it_was_never_open(self, gui):
+        gui._on_up()  # must not raise
+        assert "corrections" not in gui._open_windows
+
+
+class TestCorrectionClickVersusHold:
+    """A short press is worth a fixed nudge, a long press keeps the motor turning."""
+
+    def test_press_schedules_the_hold_threshold(self, gui, controller):
+        from bedliftcontrol.gui import CORRECTION_HOLD_DELAY_MS
+
+        gui.app.after.reset_mock()
+        gui._correction_pressed(controller.hold_front_up)
+        assert gui.app.after.call_args.args[0] == CORRECTION_HOLD_DELAY_MS
+
+    def test_press_alone_moves_nothing(self, gui, controller):
+        gui._correction_pressed(controller.hold_front_up)
+        assert not controller.run_async.called
+
+    def test_quick_release_runs_the_fixed_correction(self, gui, controller):
+        gui._correction_pressed(controller.hold_front_up)
+        gui._correction_released(controller.correct_front_up)
+        controller.run_async.assert_called_once_with(controller.correct_front_up)
+
+    def test_quick_release_cancels_the_threshold(self, gui, controller):
+        gui._correction_pressed(controller.hold_front_up)
+        timer = gui._correction_timer
+        gui._correction_released(controller.correct_front_up)
+        gui.app.after_cancel.assert_called_once_with(timer)
+        assert gui._correction_timer is None
+
+    def test_the_threshold_starts_the_hold(self, gui, controller):
+        gui._correction_pressed(controller.hold_front_up)
+        gui.app.after.call_args.args[1]()  # the scheduled callback fires
+        controller.run_async.assert_called_once_with(controller.hold_front_up)
+        assert gui._correction_holding is True
+
+    def test_releasing_a_hold_stops_the_motor(self, gui, controller):
+        gui._correction_pressed(controller.hold_front_up)
+        gui.app.after.call_args.args[1]()
+        gui._correction_released(controller.correct_front_up)
+        controller.stop.assert_called_once()
+
+    def test_releasing_a_hold_does_not_also_nudge(self, gui, controller):
+        gui._correction_pressed(controller.hold_front_up)
+        gui.app.after.call_args.args[1]()
+        controller.run_async.reset_mock()
+        gui._correction_released(controller.correct_front_up)
+        assert not controller.run_async.called, "a hold must not end in an extra click"
+        assert gui._correction_holding is False
+
+    def test_closing_the_window_ends_a_running_hold(self, gui, controller):
+        """No release event is coming once the buttons are destroyed."""
+        gui._corrections_window()
+        gui._correction_pressed(controller.hold_front_up)
+        gui.app.after.call_args.args[1]()
+        gui._on_window_closed("corrections")
+        controller.stop.assert_called_once()
+        assert gui._correction_holding is False
+
+    def test_closing_the_window_cancels_a_pending_threshold(self, gui, controller):
+        gui._corrections_window()
+        gui._correction_pressed(controller.hold_front_up)
+        gui._on_window_closed("corrections")
+        assert gui._correction_timer is None
+        assert not controller.run_async.called
+
+    def test_both_events_are_bound_on_every_button(self, gui, controller):
+        button = MagicMock()
+        gui._bind_correction(button, controller.correct_front_up, controller.hold_front_up)
+        bound = {c.args[0] for c in button.bind.call_args_list}
+        assert bound == {"<ButtonPress-1>", "<ButtonRelease-1>"}

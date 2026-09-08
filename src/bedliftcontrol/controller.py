@@ -32,6 +32,10 @@ RAMP_START_FACTOR = 3.0   # first step runs at 1/RAMP_START_FACTOR of target spe
 # Steppers can lose sync on an abrupt stop, and a lost step means the saved position
 # no longer matches the bed - which is the one thing the stored position must not do.
 STOP_RAMP_STEPS = 200
+CORRECTION_RAMP_STEPS = 25   # a correction is only 100 steps, so the ramp is shorter
+# Runaway guard for a held correction button: if a release event is ever lost, the
+# motor still stops. At 800 pps this is roughly ten seconds of holding.
+CORRECTION_HOLD_MAX_STEPS = 8000
 
 
 class BedController:
@@ -135,7 +139,13 @@ class BedController:
         return (1 / pps) / 2
 
     @staticmethod
-    def _ramped_sleeptime(index: int, steps: int, ramp: int, target: float) -> float:
+    def _ramp_factor(progress: float) -> float:
+        """Sleep multiplier along a ramp: slowest at 0.0, target speed at 1.0."""
+        progress = max(0.0, min(1.0, progress))
+        return RAMP_START_FACTOR - (RAMP_START_FACTOR - 1.0) * progress
+
+    @classmethod
+    def _ramped_sleeptime(cls, index: int, steps: int, ramp: int, target: float) -> float:
         if ramp <= 0:
             return target
         if index < ramp:
@@ -144,8 +154,7 @@ class BedController:
             progress = (steps - 1 - index) / ramp
         else:
             return target
-        factor = RAMP_START_FACTOR - (RAMP_START_FACTOR - 1.0) * progress
-        return target * factor
+        return target * cls._ramp_factor(progress)
 
     def change_direction(self, direction: int) -> None:
         if direction > 0:
@@ -198,14 +207,14 @@ class BedController:
         self._steps_total = 0
         self._steps_done = 0
 
-    @staticmethod
-    def _stopping_sleeptime(done: int, remaining: int, target: float) -> Optional[float]:
+    @classmethod
+    def _stopping_sleeptime(cls, done: int, remaining: int, target: float) -> Optional[float]:
         """Deceleration curve after a stop request, or None once it has come to rest."""
         ramp = min(STOP_RAMP_STEPS, remaining)
         if done >= ramp:
             return None
         progress = done / ramp if ramp else 1.0
-        return target * (1.0 + (RAMP_START_FACTOR - 1.0) * progress)
+        return target * cls._ramp_factor(1.0 - progress)
 
     def _advance_position(self, delta: int) -> None:
         position = self.config.position_steps + delta
@@ -213,10 +222,33 @@ class BedController:
         self.config.position_steps = max(0, min(self.config.total_steps, position))
 
     def move_steps_single(self, pin: int, direction: int, steps: int) -> None:
+        """Fixed number of pulses on one motor, ramped in and out like a full travel."""
         self.change_direction(direction)
-        sleeptime = self.calculate_sleep_from_pps(self.config.speed_pps)
-        for _ in range(steps):
-            self.move_step_single(pin, sleeptime)
+        target = self.calculate_sleep_from_pps(self.config.speed_pps)
+        ramp = min(CORRECTION_RAMP_STEPS, steps // 2)
+        for index in range(steps):
+            self.move_step_single(pin, self._ramped_sleeptime(index, steps, ramp, target))
+
+    def hold_single(self, pin: int, direction: int) -> None:
+        """Pulse one motor until stop() is called - the held correction button.
+
+        Ramps in like any other move, decelerates when released, and is capped by
+        CORRECTION_HOLD_MAX_STEPS so a lost release event cannot leave a motor running.
+        """
+        self._stop_requested.clear()
+        self.change_direction(direction)
+        target = self.calculate_sleep_from_pps(self.config.speed_pps)
+        steps = 0
+        while not self._stop_requested.is_set():
+            if steps >= CORRECTION_HOLD_MAX_STEPS:
+                logger.warning("Correction hold capped at %s steps", CORRECTION_HOLD_MAX_STEPS)
+                break
+            progress = steps / CORRECTION_RAMP_STEPS if CORRECTION_RAMP_STEPS else 1.0
+            self.move_step_single(pin, target * self._ramp_factor(progress))
+            steps += 1
+        for index in range(min(CORRECTION_RAMP_STEPS, steps)):
+            progress = 1.0 - (index + 1) / CORRECTION_RAMP_STEPS
+            self.move_step_single(pin, target * self._ramp_factor(progress))
 
     def move_up(self) -> None:
         """Travel the remaining way up from wherever the bed currently stands."""
@@ -245,3 +277,15 @@ class BedController:
 
     def correct_front_down(self) -> None:
         self.move_steps_single(Pins.FRONT_PUL.value, Direction.DOWN.value, CORRECTION_STEPS)
+
+    def hold_back_up(self) -> None:
+        self.hold_single(Pins.BACK_PUL.value, Direction.UP.value)
+
+    def hold_back_down(self) -> None:
+        self.hold_single(Pins.BACK_PUL.value, Direction.DOWN.value)
+
+    def hold_front_up(self) -> None:
+        self.hold_single(Pins.FRONT_PUL.value, Direction.UP.value)
+
+    def hold_front_down(self) -> None:
+        self.hold_single(Pins.FRONT_PUL.value, Direction.DOWN.value)

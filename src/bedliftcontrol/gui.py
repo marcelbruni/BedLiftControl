@@ -31,6 +31,9 @@ BUTTON_DISABLED_COLOR = "#333333"
 STOP_BUTTON_COLOR = "#c62828"
 STOP_BUTTON_HOVER_COLOR = "#8e1f1f"
 CORRECTION_BUTTON_HEIGHT = 90
+# Held longer than this and the correction runs on until the button is let go;
+# released sooner and it is a plain click worth CORRECTION_STEPS.
+CORRECTION_HOLD_DELAY_MS = 400
 
 POLL_INTERVAL_MS = 100
 WEATHER_UI_REFRESH_MS = 5000
@@ -86,6 +89,8 @@ class BedGui:
         self._bar_fill_level = 0.0
         self._clock_text = None
         self._kiosk_button = None
+        self._correction_timer = None
+        self._correction_holding = False
         self._open_windows: dict[str, object] = {}
         self._steps_value_label = None
         self._speed_value_label = None
@@ -107,7 +112,8 @@ class BedGui:
         bottom = ctk.CTkFrame(self.app, corner_radius=0)
         bottom.pack(side="bottom", fill="x")
         ctk.CTkButton(bottom, text="⚙", width=50, command=self._settings_window).pack(side="left", padx=4, pady=6)
-        ctk.CTkButton(bottom, text="↑↓", width=50, command=self._corrections_window).pack(side="left", padx=4, pady=6)
+        self.corrections_button = ctk.CTkButton(bottom, text="↑↓", width=50, command=self._corrections_window)
+        self.corrections_button.pack(side="left", padx=4, pady=6)
         ctk.CTkButton(bottom, text="230V on/off", width=120, command=self._not_implemented_window).pack(side="left", padx=4, pady=6)
         ctk.CTkButton(bottom, text="Wetter-Icons", width=120, command=self._weather_icons_window).pack(side="left", padx=4, pady=6)
         self._build_clock_panel(bottom)
@@ -157,6 +163,7 @@ class BedGui:
 
         # initial state reflects the stored position
         self._update_move_buttons()
+        self._update_corrections_button()
         self._set_bar(self.controller.position_fraction)
         self._update_clock()
         self._refresh_weather()
@@ -204,6 +211,13 @@ class BedGui:
         self._set_enabled(self.up_button, not self.controller.at_top)
         self._set_enabled(self.down_button, not self.controller.at_bottom)
 
+    def _update_corrections_button(self) -> None:
+        """Corrections only make sense against an end stop, judged by eye on the bed
+        itself. So the window can only be opened while the bed is parked fully up or
+        fully down and nothing is moving - not mid travel, and not after a stop."""
+        at_end_stop = self.controller.at_top or self.controller.at_bottom
+        self._set_enabled(self.corrections_button, at_end_stop and not self.controller.is_moving)
+
     def _show_stop_button(self) -> None:
         # place, not pack: it covers the whole frame and both arrows underneath it
         self.stop_button.place(x=0, y=0, relwidth=1.0, relheight=1.0)
@@ -218,6 +232,10 @@ class BedGui:
     def _start_move(self, context: MoveContext, action) -> None:
         self._set_enabled(self.up_button, False)
         self._set_enabled(self.down_button, False)
+        self._set_enabled(self.corrections_button, False)
+        # the bed is about to leave its end stop, so a correction window still standing
+        # open would be aimed at a position that no longer exists
+        self._on_window_closed("corrections")
         self._show_stop_button()
         self._move_context = context
         self.controller.run_async(action)
@@ -261,6 +279,7 @@ class BedGui:
         self.progress_label.configure(text="")
         self._set_bar(self.controller.position_fraction)
         self._update_move_buttons()
+        self._update_corrections_button()
         # only prompt when the bed really arrived at an end stop - after a stop in
         # between it is hanging somewhere and either prompt would be plain wrong
         if self._move_context == MoveContext.UP and self.controller.at_top:
@@ -273,6 +292,44 @@ class BedGui:
         if self.controller.is_moving:
             return
         self.controller.run_async(action)
+
+    # --- correction buttons: click for a fixed nudge, hold to keep going ----
+    # Only one button can be pressed at a time on a touch panel, so the pending timer
+    # and the holding flag live on the instance rather than per button.
+
+    def _bind_correction(self, button, click_action, hold_action) -> None:
+        button.bind("<ButtonPress-1>", lambda _event: self._correction_pressed(hold_action))
+        button.bind("<ButtonRelease-1>", lambda _event: self._correction_released(click_action))
+
+    def _correction_pressed(self, hold_action) -> None:
+        self._cancel_correction_timer()
+        self._correction_holding = False
+        self._correction_timer = self.app.after(
+            CORRECTION_HOLD_DELAY_MS, lambda: self._correction_hold_begins(hold_action)
+        )
+
+    def _correction_hold_begins(self, hold_action) -> None:
+        self._correction_timer = None
+        self._correction_holding = True
+        self._correct(hold_action)
+
+    def _correction_released(self, click_action) -> None:
+        if self._correction_timer is not None:
+            # let go before the threshold, so it was a click: the fixed step count
+            self._cancel_correction_timer()
+            self._correct(click_action)
+        else:
+            self._end_correction_hold()
+
+    def _end_correction_hold(self) -> None:
+        if self._correction_holding:
+            self._correction_holding = False
+            self.controller.stop()
+
+    def _cancel_correction_timer(self) -> None:
+        if self._correction_timer is not None:
+            self.app.after_cancel(self._correction_timer)
+            self._correction_timer = None
 
     def _toggle_window(self, name: str, builder) -> None:
         window = self._open_windows.get(name)
@@ -293,6 +350,12 @@ class BedGui:
         window = self._open_windows.pop(name, None)
         if name == "settings":
             self._kiosk_button = None
+        if name == "corrections":
+            # the buttons are about to be destroyed, so no release event is coming
+            self._cancel_correction_timer()
+            self._end_correction_hold()
+        self._correction_timer = None
+        self._correction_holding = False
         if window is not None:
             window.destroy()
 
@@ -345,10 +408,18 @@ class BedGui:
         content.pack(expand=True)
         ctk.CTkLabel(content, text="back").grid(row=0, column=0, padx=15, pady=(0, 8))
         ctk.CTkLabel(content, text="front").grid(row=0, column=1, padx=15, pady=(0, 8))
-        ctk.CTkButton(content, text="↑", width=110, height=CORRECTION_BUTTON_HEIGHT, command=lambda: self._correct(self.controller.correct_back_up)).grid(row=1, column=0, padx=15, pady=8)
-        ctk.CTkButton(content, text="↑", width=110, height=CORRECTION_BUTTON_HEIGHT, command=lambda: self._correct(self.controller.correct_front_up)).grid(row=1, column=1, padx=15, pady=8)
-        ctk.CTkButton(content, text="↓", width=110, height=CORRECTION_BUTTON_HEIGHT, command=lambda: self._correct(self.controller.correct_back_down)).grid(row=2, column=0, padx=15, pady=8)
-        ctk.CTkButton(content, text="↓", width=110, height=CORRECTION_BUTTON_HEIGHT, command=lambda: self._correct(self.controller.correct_front_down)).grid(row=2, column=1, padx=15, pady=8)
+        # no command=: a click and a hold have to be told apart, which needs the press
+        # and release events. See _bind_correction.
+        buttons = [
+            ("↑", 1, 0, self.controller.correct_back_up, self.controller.hold_back_up),
+            ("↑", 1, 1, self.controller.correct_front_up, self.controller.hold_front_up),
+            ("↓", 2, 0, self.controller.correct_back_down, self.controller.hold_back_down),
+            ("↓", 2, 1, self.controller.correct_front_down, self.controller.hold_front_down),
+        ]
+        for text, row, column, click_action, hold_action in buttons:
+            button = ctk.CTkButton(content, text=text, width=110, height=CORRECTION_BUTTON_HEIGHT)
+            button.grid(row=row, column=column, padx=15, pady=8)
+            self._bind_correction(button, click_action, hold_action)
         return window
 
     def _not_implemented_window(self) -> None:
