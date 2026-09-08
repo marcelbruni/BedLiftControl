@@ -110,22 +110,12 @@ class BedGui:
         self.progress_label = ctk.CTkLabel(left, text="", width=48)
         self.progress_label.pack(side="bottom", pady=4)
 
-        # center weather panel
+        # center weather panel: two independent blocks stacked in one column
         center = ctk.CTkFrame(self.app, fg_color="transparent")
         center.pack(side="left", fill="both", expand=True, padx=20, pady=(20, 0))
-        self.weather_city = ctk.CTkLabel(center, text="", font=ctk.CTkFont(size=22))
-        self.weather_city.pack(pady=(20, 0))
-        weather_row = ctk.CTkFrame(center, fg_color="transparent")
-        weather_row.pack(pady=6, padx=(40, 0))  # left pad shifts the centred group ~20px right
-        self.weather_icon = icons.IconCanvas(weather_row, size=WEATHER_ICON_SIZE, background=_panel_background())
-        self.weather_icon.pack(side="left", padx=(0, 20))
-        self.weather_temp = ctk.CTkLabel(weather_row, text="", font=ctk.CTkFont(size=52))
-        self.weather_temp.pack(side="left", padx=(20, 0))
-        self.weather_desc = ctk.CTkLabel(center, text="", font=ctk.CTkFont(size=16))
-        self.weather_desc.pack()
-        self.forecast_frame = ctk.CTkFrame(center, fg_color="transparent")
-        self.forecast_frame.pack(pady=(18, 0))
-        # last-updated line sits at the bottom of the center panel (above the menu bar)
+        self._build_current_panel(center)
+        self._build_forecast_panel(center)
+        # last-updated line belongs to neither block, it reports the age of the fetch
         self.weather_updated = ctk.CTkLabel(center, text="", font=ctk.CTkFont(size=11), text_color="#888888")
         self.weather_updated.pack(side="bottom", pady=(0, 4))
 
@@ -328,15 +318,45 @@ class BedGui:
         return window
 
     def _refresh_weather(self) -> None:
+        """Pull the latest reading and hand it to each block, then re-arm the timer."""
         weather = self.weather.current
         if weather is not None:
-            self.weather_city.configure(text=weather.city)
-            self.weather_icon.show(weather.icon)
-            self.weather_temp.configure(text=f"{round(weather.temperature)}°C")
-            self.weather_desc.configure(text=weather.description)
-            self.weather_updated.configure(text="Stand: " + weather.fetched_at.replace("T", " "))
+            self._update_current_panel(weather)
             self._render_forecast(weather.daily)
+            self.weather_updated.configure(text="Stand: " + weather.fetched_at.replace("T", " "))
         self.app.after(WEATHER_UI_REFRESH_MS, self._refresh_weather)
+
+    # --- block 1: current conditions ---------------------------------------
+    # Owns self.current_frame and nothing outside it, so it can be rebuilt, restyled or
+    # hidden without touching the forecast below.
+
+    def _build_current_panel(self, parent) -> None:
+        self.current_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        self.current_frame.pack(fill="x", pady=(20, 0))
+        self.weather_city = ctk.CTkLabel(self.current_frame, text="", font=ctk.CTkFont(size=22))
+        self.weather_city.pack()
+        weather_row = ctk.CTkFrame(self.current_frame, fg_color="transparent")
+        weather_row.pack(pady=6, padx=(40, 0))  # left pad shifts the centred group ~20px right
+        self.weather_icon = icons.IconCanvas(weather_row, size=WEATHER_ICON_SIZE, background=_panel_background())
+        self.weather_icon.pack(side="left", padx=(0, 20))
+        self.weather_temp = ctk.CTkLabel(weather_row, text="", font=ctk.CTkFont(size=52))
+        self.weather_temp.pack(side="left", padx=(20, 0))
+        self.weather_desc = ctk.CTkLabel(self.current_frame, text="", font=ctk.CTkFont(size=16))
+        self.weather_desc.pack()
+
+    def _update_current_panel(self, weather) -> None:
+        """Conditions right now - a point in time, not the day as a whole."""
+        self.weather_city.configure(text=weather.city)
+        self.weather_icon.show(weather.icon)
+        self.weather_temp.configure(text=f"{round(weather.temperature)}°C")
+        self.weather_desc.configure(text=weather.description)
+
+    # --- block 2: seven day forecast ---------------------------------------
+    # Owns self.forecast_frame and self._forecast_labels, driven purely by the daily list.
+
+    def _build_forecast_panel(self, parent) -> None:
+        self.forecast_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        self.forecast_frame.pack(pady=(18, 0))
 
     def _render_forecast(self, daily) -> None:
         key = [(day.date, day.icon, day.temp_max, day.temp_min, day.rain) for day in daily]

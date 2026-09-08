@@ -232,3 +232,42 @@ class TestWeatherDisplay:
         weather.current = Weather("Thun", 21.0, "Klar", "☀️", "2026-09-03T11:00", daily=daily)
         gui._refresh_weather()
         assert len(gui._forecast_labels) == 10  # 2 days x 5 rows (incl. rain)
+
+
+class TestPanelSeparation:
+    """The current-conditions block and the forecast block must stay independent, so
+    either can be reworked without disturbing the other."""
+
+    def test_current_panel_has_its_own_frame(self, gui):
+        assert gui.current_frame is not None
+        assert gui.forecast_frame is not gui.current_frame
+
+    def test_updating_the_current_panel_leaves_the_forecast_alone(self, gui, weather, monkeypatch):
+        from bedliftcontrol.weather import Weather
+
+        called = []
+        monkeypatch.setattr(gui, "_render_forecast", lambda daily: called.append(daily))
+        gui._update_current_panel(Weather("Thun", 21.4, "Klar", "sun", "2026-09-03T11:00"))
+        assert not called, "block 1 must not trigger a forecast render"
+
+    def test_rendering_the_forecast_leaves_the_current_panel_alone(self, gui):
+        from bedliftcontrol.weather import DailyForecast
+
+        gui.weather_city.configure.reset_mock()
+        gui.weather_temp.configure.reset_mock()
+        gui.weather_desc.configure.reset_mock()
+        gui._render_forecast([DailyForecast("Do", "2026-09-03", "sun", 22.0, 12.0, rain=10)])
+        assert not gui.weather_city.configure.called
+        assert not gui.weather_temp.configure.called
+        assert not gui.weather_desc.configure.called
+
+    def test_refresh_drives_both_blocks(self, gui, weather, monkeypatch):
+        from bedliftcontrol.weather import DailyForecast, Weather
+
+        daily = [DailyForecast("Do", "2026-09-03", "sun", 22.0, 12.0, rain=10)]
+        weather.current = Weather("Thun", 21.0, "Klar", "sun", "2026-09-03T11:00", daily=daily)
+        seen = []
+        monkeypatch.setattr(gui, "_update_current_panel", lambda w: seen.append("current"))
+        monkeypatch.setattr(gui, "_render_forecast", lambda d: seen.append("forecast"))
+        gui._refresh_weather()
+        assert seen == ["current", "forecast"]
