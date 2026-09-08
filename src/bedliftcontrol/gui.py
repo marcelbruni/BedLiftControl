@@ -16,6 +16,9 @@ APPEARANCE_MODE = "dark"
 COLOR_THEME = "green"
 PROGRESS_COLOR = "#43a047"
 MIN_BAR_FRACTION = 0.12  # a stub of the bar stays visible even when the bed is up
+STUB_TRIM_PX = 10  # shortens that stub; converted to a fraction of the track at runtime
+ICON_HEIGHT = 21  # matches the emoji glyph height; trimmed off the label's empty top so
+                  # the square label stays inside the bar's rounded top cap
 ARROW_FONT_SIZE = 96
 BUTTON_COLOR = "#2fa572"
 BUTTON_DISABLED_COLOR = "#333333"
@@ -43,6 +46,7 @@ class BedGui:
         self.controller = controller
         self.weather = weather
         self._move_context: MoveContext | None = None
+        self._bar_fill_level = 0.0
         self._open_windows: dict[str, object] = {}
         self._steps_value_label = None
         self._speed_value_label = None
@@ -72,9 +76,13 @@ class BedGui:
         self.progress_track = ctk.CTkFrame(left, width=28, fg_color="#3a3a3a", corner_radius=10)
         self.progress_track.pack(side="top", fill="y", expand=True, padx=6, pady=(6, 4))
         self.progress_track.pack_propagate(False)
+        self.progress_track.bind("<Configure>", lambda _event: self._set_bar(self._bar_fill_level))
         self.progress_fill = ctk.CTkFrame(self.progress_track, fg_color=PROGRESS_COLOR, corner_radius=10)
-        # bed icon rides on the bottom edge of the green fill (moves with it automatically)
-        self.bed_icon = ctk.CTkLabel(self.progress_fill, text="🛏", font=ctk.CTkFont(family=_EMOJI_FONT, size=16), fg_color="transparent")
+        # bed icon rides on the bottom edge of the green fill (moves with it automatically).
+        # ICON_HEIGHT shrinks the label from CTk's default 28px, anchor="s" keeps the glyph
+        # on the bottom edge, so the trim comes off the empty top - otherwise the label's
+        # square green box would overdraw the rounded top cap of the bar.
+        self.bed_icon = ctk.CTkLabel(self.progress_fill, text="🛏", font=ctk.CTkFont(family=_EMOJI_FONT, size=16), fg_color="transparent", height=ICON_HEIGHT, anchor="s")
         self.bed_icon.place(relx=0.5, rely=1.0, y=-4, anchor="s")
         self.progress_label = ctk.CTkLabel(left, text="", width=48)
         self.progress_label.pack(side="bottom", pady=4)
@@ -122,13 +130,24 @@ class BedGui:
             fg_color=BUTTON_COLOR if enabled else BUTTON_DISABLED_COLOR,
         )
 
+    def _stub_trim(self) -> float:
+        """STUB_TRIM_PX as a fraction of the track, 0.0 while the track has no size yet."""
+        height = self.progress_track.winfo_height()
+        if height <= 1:
+            return 0.0
+        return STUB_TRIM_PX / height
+
     def _set_bar(self, fill_level: float) -> None:
         # inverted + top-anchored: a stub stays visible when the bed is up, fills from
         # the top down as the bed is lowered
+        self._bar_fill_level = fill_level
         fraction = 1.0 - max(0.0, min(1.0, fill_level))
         # map [0,1] onto [MIN_BAR_FRACTION,1.0] so the fill keeps moving over the whole
         # travel instead of freezing on the stub for the last few percent
         relheight = MIN_BAR_FRACTION + fraction * (1.0 - MIN_BAR_FRACTION)
+        # trim the stub only: full weight when the bed is up, gone when it is fully down,
+        # so the bar still reaches the bottom of the track
+        relheight -= self._stub_trim() * (1.0 - fraction)
         self.progress_fill.place(relx=0, rely=0, relwidth=1.0, relheight=relheight, anchor="nw")
 
     def _start_move(self, context: MoveContext, action) -> None:

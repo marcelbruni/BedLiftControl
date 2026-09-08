@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from bedliftcontrol import gui as gui_module
-from bedliftcontrol.gui import MIN_BAR_FRACTION, BedGui, MoveContext
+from bedliftcontrol.gui import MIN_BAR_FRACTION, STUB_TRIM_PX, BedGui, MoveContext
 
 WIDGETS = [
     "CTk",
@@ -27,12 +27,20 @@ def _states(button):
     return [call.kwargs.get("state") for call in button.configure.call_args_list]
 
 
+def _widget_mock():
+    """A fresh widget mock. winfo_height() answers 0 ("not laid out yet"), because
+    MagicMock's default would blow up the numeric comparison in BedGui._stub_trim."""
+    widget = MagicMock()
+    widget.winfo_height.return_value = 0
+    return widget
+
+
 @pytest.fixture(autouse=True)
 def ctk_widgets(monkeypatch):
     import customtkinter
 
     for name in WIDGETS:
-        getattr(customtkinter, name).side_effect = lambda *args, **kwargs: MagicMock()
+        getattr(customtkinter, name).side_effect = lambda *args, **kwargs: _widget_mock()
     monkeypatch.setattr(gui_module, "messagebox", MagicMock())
     yield
     for name in WIDGETS:
@@ -133,6 +141,17 @@ class TestProgressBar:
     def test_bar_keeps_a_stub_when_up(self, gui):
         gui._set_bar(1.0)  # 1.0 == bed up
         gui.progress_fill.place.assert_called_with(relx=0, rely=0, relwidth=1.0, relheight=MIN_BAR_FRACTION, anchor="nw")
+
+    def test_stub_is_trimmed_by_ten_pixels_when_up(self, gui):
+        gui.progress_track.winfo_height.return_value = 200
+        gui._set_bar(1.0)  # 1.0 == bed up
+        expected = MIN_BAR_FRACTION - STUB_TRIM_PX / 200
+        gui.progress_fill.place.assert_called_with(relx=0, rely=0, relwidth=1.0, relheight=expected, anchor="nw")
+
+    def test_bar_still_fills_the_track_when_down(self, gui):
+        gui.progress_track.winfo_height.return_value = 200
+        gui._set_bar(0.0)  # 0.0 == bed down, trim must not apply here
+        gui.progress_fill.place.assert_called_with(relx=0, rely=0, relwidth=1.0, relheight=1.0, anchor="nw")
 
     def test_bar_full_when_down(self, gui):
         gui._set_bar(0.0)  # 0.0 == bed down
