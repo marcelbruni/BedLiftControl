@@ -2,18 +2,49 @@
 
 import json
 
+import pytest
+
 from bedliftcontrol import weather as weather_module
-from bedliftcontrol.weather import DailyForecast, Weather, WeatherService, describe_weather_code
+from bedliftcontrol.icons import ICON_SPECS
+from bedliftcontrol.weather import (
+    WEATHER_CODES,
+    DailyForecast,
+    Weather,
+    WeatherService,
+    describe_weather_code,
+)
 
 
 class TestDescribeWeatherCode:
     def test_known_code(self):
-        description, icon = describe_weather_code(0)
-        assert description == "Klar"
-        assert icon
+        description, icon_key = describe_weather_code(0)
+        assert description == "Klarer Himmel"
+        assert icon_key == "sun"
 
     def test_unknown_code_falls_back(self):
-        assert describe_weather_code(12345) == ("Unbekannt", "❓")
+        assert describe_weather_code(12345) == ("Unbekannt", "unknown")
+
+    @pytest.mark.parametrize("code", [0, 1, 2, 3, 45, 48, 51, 53, 55, 56, 57, 61, 63, 65,
+                                      66, 67, 71, 73, 75, 77, 80, 81, 82, 85, 86, 95, 96, 99])
+    def test_every_wmo_code_is_mapped(self, code):
+        """Open-Meteo only ever sends these codes, so none of them may hit the fallback."""
+        description, icon_key = describe_weather_code(code)
+        assert description != "Unbekannt"
+        assert icon_key != "unknown"
+
+    def test_no_sharp_s_in_descriptions(self):
+        """Swiss spelling: ss, never sz."""
+        assert not any("ß" in entry[0] for entry in WEATHER_CODES.values())
+
+    def test_every_icon_key_is_drawable(self):
+        """A key with no drawing would silently render as the unknown placeholder."""
+        missing = {code: key for code, (_, key) in WEATHER_CODES.items() if key not in ICON_SPECS}
+        assert not missing
+
+    def test_no_emoji_left_in_the_table(self):
+        """Icons are drawn now - a stray glyph would mean a forgotten entry."""
+        assert all(key.replace("-", "").isalnum() and key.isascii()
+                   for _, key in WEATHER_CODES.values())
 
 
 class TestWeatherDataclass:

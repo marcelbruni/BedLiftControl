@@ -7,8 +7,9 @@ from tkinter import messagebox
 
 import customtkinter as ctk
 
+from bedliftcontrol import icons
 from bedliftcontrol.controller import BedController
-from bedliftcontrol.weather import WeatherService
+from bedliftcontrol.weather import WEATHER_CODES, WeatherService
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +31,31 @@ FORECAST_COL_WIDTH = 50
 # Emojis must be drawn with an emoji font, otherwise Tk measures them with the
 # default (Roboto) font and renders them wider, which shifts them off-center.
 _EMOJI_FONT = "Segoe UI Emoji" if sys.platform.startswith("win") else "Noto Color Emoji"
+WEATHER_ICON_SIZE = 64      # big icon next to the current temperature
+FORECAST_ICON_SIZE = 34     # one per day, must stay inside FORECAST_COL_WIDTH
+
+# reference window listing every weather code with its icon
+ICON_TABLE_ICON_SIZE = 26
+ICON_TABLE_ROW_HEIGHT = 26
+ICON_TABLE_PAD = 16
+ICON_TABLE_COLUMNS = [  # (header, width, anchor)
+    ("Code", 50, "e"),
+    ("Icon", 60, "center"),
+    ("Text", 250, "w"),
+]
+
 STEPS_MIN = 27000
 STEPS_MAX = 30000
 SPEED_MIN = 200
 SPEED_MAX = 1400
+
+
+def _panel_background() -> str:
+    """Tk canvases cannot be transparent, so they get painted in the window colour."""
+    color = ctk.ThemeManager.theme["CTk"]["fg_color"]
+    if isinstance(color, (list, tuple)):
+        return color[1] if APPEARANCE_MODE == "dark" else color[0]
+    return color
 
 
 class MoveContext(Enum):
@@ -68,6 +90,7 @@ class BedGui:
         ctk.CTkButton(bottom, text="⚙", width=50, command=self._settings_window).pack(side="left", padx=4, pady=6)
         ctk.CTkButton(bottom, text="↑↓", width=50, command=self._corrections_window).pack(side="left", padx=4, pady=6)
         ctk.CTkButton(bottom, text="230V on/off", width=120, command=self._not_implemented_window).pack(side="left", padx=4, pady=6)
+        ctk.CTkButton(bottom, text="Wetter-Icons", width=120, command=self._weather_icons_window).pack(side="left", padx=4, pady=6)
 
         # left vertical bar: empty when the bed is up, fills from the top down as the
         # bed is lowered (custom, since CTkProgressBar only ever fills from the bottom)
@@ -94,7 +117,7 @@ class BedGui:
         self.weather_city.pack(pady=(20, 0))
         weather_row = ctk.CTkFrame(center, fg_color="transparent")
         weather_row.pack(pady=6, padx=(40, 0))  # left pad shifts the centred group ~20px right
-        self.weather_icon = ctk.CTkLabel(weather_row, text="", font=ctk.CTkFont(family=_EMOJI_FONT, size=52))
+        self.weather_icon = icons.IconCanvas(weather_row, size=WEATHER_ICON_SIZE, background=_panel_background())
         self.weather_icon.pack(side="left", padx=(0, 20))
         self.weather_temp = ctk.CTkLabel(weather_row, text="", font=ctk.CTkFont(size=52))
         self.weather_temp.pack(side="left", padx=(20, 0))
@@ -273,11 +296,42 @@ class BedGui:
         ctk.CTkLabel(window, text="not implemented!").pack(padx=20, pady=25)
         return window
 
+    def _weather_icons_window(self) -> None:
+        self._toggle_window("weather_icons", self._build_weather_icons_window)
+
+    def _build_weather_icons_window(self):
+        """Reference list of every WMO code with both of its icons, for eyeballing them
+        side by side. Sized to fit all rows at once, so the whole table screenshots."""
+        window = ctk.CTkToplevel(self.app)
+        window.title("Wetter-Icons")
+        content = ctk.CTkFrame(window, fg_color="transparent")
+        content.pack(padx=ICON_TABLE_PAD, pady=ICON_TABLE_PAD)
+
+        header_font = ctk.CTkFont(size=13, weight="bold")
+        for column, (title, width, anchor) in enumerate(ICON_TABLE_COLUMNS):
+            ctk.CTkLabel(content, text=title, font=header_font, width=width, anchor=anchor).grid(
+                row=0, column=column, padx=6, pady=(0, 6), sticky="ew"
+            )
+        for row, (code, (description, icon_key)) in enumerate(WEATHER_CODES.items(), start=1):
+            for column, text in ((0, str(code)), (2, description)):
+                _, width, anchor = ICON_TABLE_COLUMNS[column]
+                ctk.CTkLabel(content, text=text, width=width, anchor=anchor, height=ICON_TABLE_ROW_HEIGHT).grid(
+                    row=row, column=column, padx=6, sticky="ew"
+                )
+            icon = icons.IconCanvas(content, size=ICON_TABLE_ICON_SIZE, background=_panel_background())
+            icon.show(icon_key)
+            icon.grid(row=row, column=1, padx=6)
+
+        # size the window to whatever the table actually needs, so nothing is cut off
+        window.update_idletasks()
+        window.geometry(f"{content.winfo_reqwidth() + 2 * ICON_TABLE_PAD}x{content.winfo_reqheight() + 2 * ICON_TABLE_PAD}")
+        return window
+
     def _refresh_weather(self) -> None:
         weather = self.weather.current
         if weather is not None:
             self.weather_city.configure(text=weather.city)
-            self.weather_icon.configure(text=weather.icon)
+            self.weather_icon.show(weather.icon)
             self.weather_temp.configure(text=f"{round(weather.temperature)}°C")
             self.weather_desc.configure(text=weather.description)
             self.weather_updated.configure(text="Stand: " + weather.fetched_at.replace("T", " "))
@@ -296,15 +350,19 @@ class BedGui:
             self.forecast_frame.grid_columnconfigure(index, weight=1, uniform="forecast", minsize=FORECAST_COL_WIDTH)
             rows = [
                 (day.day, ctk.CTkFont(size=13, weight="bold"), None),
-                (day.icon, ctk.CTkFont(family=_EMOJI_FONT, size=24), None),
                 (f"{round(day.temp_max)}°", ctk.CTkFont(size=12), None),
                 (f"{round(day.temp_min)}°", ctk.CTkFont(size=12), "#888888"),
             ]
             if day.rain is not None:
                 rows.append((f"💧 {day.rain}%", ctk.CTkFont(size=12), "#5aa0e0"))
+            # the icon is drawn, not text, so it gets its own row between name and temps
+            icon = icons.IconCanvas(self.forecast_frame, size=FORECAST_ICON_SIZE, background=_panel_background())
+            icon.show(day.icon)
+            icon.grid(row=1, column=index, padx=8, pady=2)
+            self._forecast_labels.append(icon)
             for row, (text, font, color) in enumerate(rows):
                 label = ctk.CTkLabel(self.forecast_frame, text=text, anchor="center", font=font, text_color=color)
-                label.grid(row=row, column=index, padx=8, pady=1, sticky="ew")
+                label.grid(row=row if row == 0 else row + 1, column=index, padx=8, pady=1, sticky="ew")
                 self._forecast_labels.append(label)
 
     def display(self) -> None:

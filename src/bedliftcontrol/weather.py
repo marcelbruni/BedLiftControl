@@ -29,37 +29,47 @@ FORECAST_URL = (
 REFRESH_INTERVAL_SECONDS = 1800
 HTTP_TIMEOUT = 8
 
-# Open-Meteo weather codes -> (description, emoji)
-# Emojis are kept without the U+FE0F variation selector: with it, Tk gives the
-# glyph a ~76px advance (32px symbol + 44px trailing space) and it can never be
-# centered. Without it the advance matches the symbol width.
+# Open-Meteo WMO weather codes -> (description, icon key). Texts follow the official
+# WMO interpretation wording from https://open-meteo.com/en/docs, in German.
+# The icon key names a drawing in bedliftcontrol.icons - one icon per code, scaled to
+# whatever size the caller needs. Emoji were dropped because Unicode has no graded
+# weather glyphs (no "cloud with two drops") and Tk shows tofu boxes for the ones the
+# installed emoji font has no monochrome outline for.
 WEATHER_CODES = {
-    0: ("Klar", "☀"),
-    1: ("Überwiegend klar", "⛅"),
-    2: ("Teilweise bewölkt", "⛅"),
-    3: ("Bewölkt", "☁"),
-    45: ("Nebel", "☁"),
-    48: ("Nebel", "☁"),
-    51: ("Nieselregen", "☔"),
-    53: ("Nieselregen", "☔"),
-    55: ("Nieselregen", "☔"),
-    61: ("Regen", "☔"),
-    63: ("Regen", "☔"),
-    65: ("Starker Regen", "☔"),
-    71: ("Schnee", "❄"),
-    73: ("Schnee", "❄"),
-    75: ("Starker Schnee", "❄"),
-    80: ("Schauer", "☔"),
-    81: ("Schauer", "☔"),
-    82: ("Heftige Schauer", "⛈"),
-    95: ("Gewitter", "⛈"),
-    96: ("Gewitter", "⛈"),
-    99: ("Gewitter", "⛈"),
+    0: ("Klarer Himmel",                     "sun"),
+    1: ("Überwiegend klar",                  "sun-cloud-light"),
+    2: ("Teilweise bewölkt",                 "sun-cloud"),
+    3: ("Bedeckt",                           "cloud"),
+    45: ("Nebel",                             "fog"),
+    48: ("Reifnebel",                         "fog-ice"),
+    51: ("Leichter Nieselregen",              "drizzle-1"),
+    53: ("Mässiger Nieselregen",              "drizzle-2"),
+    55: ("Dichter Nieselregen",               "drizzle-3"),
+    56: ("Leichter gefrierender Nieselregen", "drizzle-ice-1"),
+    57: ("Dichter gefrierender Nieselregen",  "drizzle-ice-2"),
+    61: ("Leichter Regen",                    "rain-1"),
+    63: ("Mässiger Regen",                    "rain-2"),
+    65: ("Starker Regen",                     "rain-3"),
+    66: ("Leichter gefrierender Regen",       "rain-ice-3"),
+    67: ("Starker gefrierender Regen",        "rain-ice-4"),
+    71: ("Leichter Schneefall",               "snow-1"),
+    73: ("Mässiger Schneefall",               "snow-2"),
+    75: ("Starker Schneefall",                "snow-3"),
+    77: ("Schneegriesel",                     "flake"),
+    80: ("Leichte Regenschauer",              "shower-1"),
+    81: ("Mässige Regenschauer",              "shower-2"),
+    82: ("Heftige Regenschauer",              "shower-3"),
+    85: ("Leichte Schneeschauer",             "snow-shower-1"),
+    86: ("Starke Schneeschauer",              "snow-shower-2"),
+    95: ("Gewitter",                          "thunder"),
+    96: ("Gewitter mit leichtem Hagel",       "thunder-hail-2"),
+    99: ("Gewitter mit starkem Hagel",        "thunder-hail-4"),
 }
 
 
 def describe_weather_code(code: int) -> tuple[str, str]:
-    return WEATHER_CODES.get(code, ("Unbekannt", "❓"))
+    """(description, icon key) for a WMO code. See WEATHER_CODES."""
+    return WEATHER_CODES.get(code, ("Unbekannt", "unknown"))
 
 
 WEEKDAY_LABELS = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
