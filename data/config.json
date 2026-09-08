@@ -1,6 +1,7 @@
 {
   "total_steps": 28000,
   "speed_pps": 800.0,
-  "bed_up": true,
-  "kiosk": false
+  "bed_up": false,
+  "kiosk": false,
+  "position_steps": 0
 }

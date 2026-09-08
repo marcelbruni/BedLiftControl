@@ -172,18 +172,41 @@ class TestMoveSteps:
 
 
 class TestMoveUpDown:
+    """bed_up is now derived from the absolute position rather than set blindly, so the
+    stubbed move has to move the position for the flag to follow."""
+
+    @staticmethod
+    def _stub_travel(controller, monkeypatch):
+        """Stand in for move_steps: apply the requested travel to the position."""
+        from bedliftcontrol.controller import Direction
+
+        def travel(direction, steps):
+            delta = -steps if direction == Direction.DOWN.value else steps
+            controller.config.position_steps = max(
+                0, min(controller.config.total_steps, controller.config.position_steps + delta)
+            )
+
+        monkeypatch.setattr(controller, "move_steps", travel)
+
     def test_move_up_sets_bed_up_and_persists(self, controller, monkeypatch):
-        monkeypatch.setattr(controller, "move_steps", lambda *_: None)
+        self._stub_travel(controller, monkeypatch)
         controller.move_up()
         assert controller.config.bed_up is True
         assert Config.load(controller.config.path).bed_up is True
 
     def test_move_down_clears_bed_up_and_persists(self, controller, monkeypatch):
-        monkeypatch.setattr(controller, "move_steps", lambda *_: None)
+        self._stub_travel(controller, monkeypatch)
+        controller.config.position_steps = controller.config.total_steps
         controller.config.bed_up = True
         controller.move_down()
         assert controller.config.bed_up is False
         assert Config.load(controller.config.path).bed_up is False
+
+    def test_a_stopped_move_does_not_claim_the_bed_is_up(self, controller, monkeypatch):
+        """The 'attach the safety ropes' state must not be recorded for a partial move."""
+        monkeypatch.setattr(controller, "move_steps", lambda *_: None)  # nothing moved
+        controller.move_up()
+        assert controller.config.bed_up is False
 
 
 class TestCleanup:

@@ -25,6 +25,8 @@ ICON_HEIGHT = 21  # matches the emoji glyph height; trimmed off the label's empt
 ARROW_FONT_SIZE = 96
 BUTTON_COLOR = "#2fa572"
 BUTTON_DISABLED_COLOR = "#333333"
+STOP_BUTTON_COLOR = "#c62828"
+STOP_BUTTON_HOVER_COLOR = "#8e1f1f"
 CORRECTION_BUTTON_HEIGHT = 90
 
 POLL_INTERVAL_MS = 100
@@ -41,6 +43,10 @@ FORECAST_ICON_SIZE = 34     # one per day, must stay inside FORECAST_COL_WIDTH
 ICON_TABLE_ICON_SIZE = 26
 ICON_TABLE_ROW_HEIGHT = 26
 ICON_TABLE_PAD = 16
+# The Pi panel is 800x480; leave room for the title bar so the window fits whole and
+# the table scrolls inside it instead of running off the bottom of the screen.
+ICON_TABLE_SCREEN_MARGIN = 70
+ICON_TABLE_ROW_PITCH = ICON_TABLE_ROW_HEIGHT + 4  # row height plus the grid pady
 ICON_TABLE_COLUMNS = [  # (header, width, anchor)
     ("Code", 50, "e"),
     ("Icon", 60, "center"),
@@ -131,20 +137,23 @@ class BedGui:
         self.weather_updated.pack(side="bottom", pady=(0, 4))
 
         # right up/down control buttons
-        right = ctk.CTkFrame(self.app)
-        right.pack(side="right", fill="y", padx=10, pady=10)
+        self.control_frame = ctk.CTkFrame(self.app)
+        self.control_frame.pack(side="right", fill="y", padx=10, pady=10)
         arrow_font = ctk.CTkFont(size=ARROW_FONT_SIZE)
-        self.up_button = ctk.CTkButton(right, text="↑", font=arrow_font, width=180, command=self._on_up)
+        self.up_button = ctk.CTkButton(self.control_frame, text="↑", font=arrow_font, width=180, command=self._on_up)
         self.up_button.pack(side="top", fill="both", expand=True, pady=(0, 5))
-        self.down_button = ctk.CTkButton(right, text="↓", font=arrow_font, width=180, command=self._on_down)
+        self.down_button = ctk.CTkButton(self.control_frame, text="↓", font=arrow_font, width=180, command=self._on_down)
         self.down_button.pack(side="bottom", fill="both", expand=True)
+        # built once and placed over both arrows while a movement runs
+        self.stop_button = ctk.CTkButton(
+            self.control_frame, text="STOP", font=arrow_font, width=180,
+            fg_color=STOP_BUTTON_COLOR, hover_color=STOP_BUTTON_HOVER_COLOR,
+            command=self._on_stop,
+        )
 
         # initial state reflects the stored position
-        if self.controller.config.bed_up:
-            self._set_enabled(self.up_button, False)
-        else:
-            self._set_enabled(self.down_button, False)
-        self._set_bar(1.0 if self.controller.config.bed_up else 0.0)
+        self._update_move_buttons()
+        self._set_bar(self.controller.position_fraction)
         self._update_clock()
         self._refresh_weather()
         self._apply_window_mode()
@@ -176,9 +185,27 @@ class BedGui:
         relheight -= self._stub_trim() * (1.0 - fraction)
         self.progress_fill.place(relx=0, rely=0, relwidth=1.0, relheight=relheight, anchor="nw")
 
+    def _update_move_buttons(self) -> None:
+        """An arrow is only dead at the very end of its travel; a stop in between leaves
+        both live, so the bed can carry on or turn back."""
+        self._set_enabled(self.up_button, not self.controller.at_top)
+        self._set_enabled(self.down_button, not self.controller.at_bottom)
+
+    def _show_stop_button(self) -> None:
+        # place, not pack: it covers the whole frame and both arrows underneath it
+        self.stop_button.place(x=0, y=0, relwidth=1.0, relheight=1.0)
+        self.stop_button.lift()
+
+    def _hide_stop_button(self) -> None:
+        self.stop_button.place_forget()
+
+    def _on_stop(self) -> None:
+        self.controller.stop()
+
     def _start_move(self, context: MoveContext, action) -> None:
         self._set_enabled(self.up_button, False)
         self._set_enabled(self.down_button, False)
+        self._show_stop_button()
         self._move_context = context
         self.controller.run_async(action)
         self._schedule_poll()
@@ -198,23 +225,23 @@ class BedGui:
         self._start_move(MoveContext.DOWN, self.controller.move_down)
 
     def _poll_movement(self) -> None:
-        # runs on the main thread; update the bar until the background move finishes
+        # runs on the main thread; follow the absolute position until the move finishes.
+        # absolute, not per-move progress: a move that starts half way up would otherwise
+        # send the bar back to the bottom before climbing again
         if self.controller.is_moving:
-            progress = self.controller.progress
-            fill = progress if self._move_context == MoveContext.UP else 1.0 - progress
-            self._set_bar(fill)
-            self.progress_label.configure(text=f"{round(progress * 100)}%")
+            fraction = self.controller.position_fraction
+            self._set_bar(fraction)
+            self.progress_label.configure(text=f"{round(fraction * 100)}%")
             self._schedule_poll()
             return
+        self._hide_stop_button()
         self.progress_label.configure(text="")
-        self._set_bar(1.0 if self._move_context == MoveContext.UP else 0.0)
-        if self._move_context == MoveContext.UP:
-            self._set_enabled(self.up_button, False)
-            self._set_enabled(self.down_button, True)
+        self._set_bar(self.controller.position_fraction)
+        self._update_move_buttons()
+        # only prompt for the ropes when the bed really arrived at the top - after a stop
+        # in between it is hanging somewhere and the prompt would be plain wrong
+        if self._move_context == MoveContext.UP and self.controller.at_top:
             messagebox.showinfo("Bett oben", "Sicherungsseile anbringen und Motoren ausschalten!")
-        else:
-            self._set_enabled(self.up_button, True)
-            self._set_enabled(self.down_button, False)
         self._move_context = None
 
     def _correct(self, action) -> None:
@@ -312,13 +339,30 @@ class BedGui:
     def _weather_icons_window(self) -> None:
         self._toggle_window("weather_icons", self._build_weather_icons_window)
 
+    @staticmethod
+    def _icon_table_visible_height(screen_height: int, rows: int) -> int:
+        """How much of the table is on screen at once - the rest is scrolled to.
+
+        Budgeted so the finished window (this plus the padding above and below) still
+        fits the screen with room for the title bar, which the 800x480 Pi panel needs.
+        """
+        available = screen_height - ICON_TABLE_SCREEN_MARGIN - 2 * ICON_TABLE_PAD
+        wanted = (rows + 1) * ICON_TABLE_ROW_PITCH  # +1 for the header row
+        return max(ICON_TABLE_ROW_PITCH, min(wanted, available))
+
     def _build_weather_icons_window(self):
-        """Reference list of every WMO code with both of its icons, for eyeballing them
-        side by side. Sized to fit all rows at once, so the whole table screenshots."""
+        """Reference list of every WMO code with its icon.
+
+        The table is taller than the Pi's 480px panel, so it lives in a scrollable frame
+        and the window is capped to the screen height.
+        """
         window = ctk.CTkToplevel(self.app)
         window.title("Wetter-Icons")
-        content = ctk.CTkFrame(window, fg_color="transparent")
-        content.pack(padx=ICON_TABLE_PAD, pady=ICON_TABLE_PAD)
+        table_width = sum(width for _, width, _ in ICON_TABLE_COLUMNS) + 12 * len(ICON_TABLE_COLUMNS)
+        visible_height = self._icon_table_visible_height(window.winfo_screenheight(), len(WEATHER_CODES))
+        content = ctk.CTkScrollableFrame(window, fg_color="transparent",
+                                         width=table_width, height=visible_height)
+        content.pack(fill="both", expand=True, padx=ICON_TABLE_PAD, pady=ICON_TABLE_PAD)
 
         header_font = ctk.CTkFont(size=13, weight="bold")
         for column, (title, width, anchor) in enumerate(ICON_TABLE_COLUMNS):
@@ -335,9 +379,10 @@ class BedGui:
             icon.show(icon_key)
             icon.grid(row=row, column=1, padx=6)
 
-        # size the window to whatever the table actually needs, so nothing is cut off
+        # size the window to the visible part of the table; the rest is scrolled to
         window.update_idletasks()
-        window.geometry(f"{content.winfo_reqwidth() + 2 * ICON_TABLE_PAD}x{content.winfo_reqheight() + 2 * ICON_TABLE_PAD}")
+        window.geometry(f"{content.winfo_reqwidth() + 2 * ICON_TABLE_PAD}"
+                        f"x{visible_height + 2 * ICON_TABLE_PAD}")
         return window
 
     def _refresh_weather(self) -> None:

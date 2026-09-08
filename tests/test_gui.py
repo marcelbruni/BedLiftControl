@@ -14,6 +14,7 @@ from bedliftcontrol.gui import MIN_BAR_FRACTION, STUB_TRIM_PX, BedGui, MoveConte
 WIDGETS = [
     "CTk",
     "CTkFrame",
+    "CTkScrollableFrame",
     "CTkButton",
     "CTkProgressBar",
     "CTkLabel",
@@ -32,6 +33,9 @@ def _widget_mock():
     MagicMock's default would blow up the numeric comparison in BedGui._stub_trim."""
     widget = MagicMock()
     widget.winfo_height.return_value = 0
+    # real numbers, because the sizing code compares them
+    widget.winfo_screenheight.return_value = 1050
+    widget.winfo_screenwidth.return_value = 1680
     return widget
 
 
@@ -52,7 +56,12 @@ def controller():
     fake = MagicMock()
     fake.is_moving = False
     fake.progress = 0.0
+    # the bed sits at the bottom: position 0, so only the up arrow is live
+    fake.position_fraction = 0.0
+    fake.at_top = False
+    fake.at_bottom = True
     fake.config.bed_up = False
+    fake.config.position_steps = 0
     fake.config.total_steps = 28000
     fake.config.speed_pps = 800.0
     fake.config.kiosk = False
@@ -78,9 +87,21 @@ class TestInitialState:
         assert "disabled" in _states(built.down_button)
 
     def test_bed_up_disables_up_button(self, controller, weather):
+        """The arrow state comes from the absolute position now, not from the flag."""
+        controller.at_top = True
+        controller.at_bottom = False
+        controller.position_fraction = 1.0
         controller.config.bed_up = True
         built = BedGui(controller, weather)
         assert "disabled" in _states(built.up_button)
+
+    def test_a_position_in_between_leaves_both_arrows_live(self, controller, weather):
+        controller.at_top = False
+        controller.at_bottom = False
+        controller.position_fraction = 0.4
+        built = BedGui(controller, weather)
+        assert "normal" in _states(built.up_button)
+        assert "normal" in _states(built.down_button)
 
     def test_build_sets_initial_bar(self, gui):
         gui.progress_fill.place.assert_called()
@@ -116,6 +137,9 @@ class TestOnDown:
 class TestPollMovement:
     def test_finalizes_up(self, gui, controller):
         controller.is_moving = False
+        controller.at_top = True
+        controller.at_bottom = False
+        controller.position_fraction = 1.0
         gui._move_context = MoveContext.UP
         gui._poll_movement()
         assert "disabled" in _states(gui.up_button)
@@ -131,11 +155,20 @@ class TestPollMovement:
 
     def test_shows_progress_while_moving(self, gui, controller):
         controller.is_moving = True
-        controller.progress = 0.5
+        controller.position_fraction = 0.5
         gui._move_context = MoveContext.UP
         gui._poll_movement()
         gui.progress_label.configure.assert_any_call(text="50%")
         gui.progress_fill.place.assert_called()
+
+    def test_progress_follows_the_absolute_position(self, gui, controller):
+        """A move starting half way up must not send the bar back to the bottom."""
+        controller.is_moving = True
+        controller.position_fraction = 0.6
+        controller.progress = 0.1  # per-move progress, deliberately different
+        gui._move_context = MoveContext.UP
+        gui._poll_movement()
+        gui.progress_label.configure.assert_any_call(text="60%")
 
 
 class TestProgressBar:
@@ -422,3 +455,110 @@ class TestKioskMode:
         gui._settings_window()
         window = gui._open_windows["settings"]
         assert not any(call.args[:1] == ("-topmost",) for call in window.attributes.call_args_list)
+
+
+class TestStopButton:
+    """A movement can be interrupted; the stop button covers both arrows while it runs."""
+
+    def test_appears_when_a_move_starts(self, gui, controller):
+        gui._on_up()
+        gui.stop_button.place.assert_called_once_with(x=0, y=0, relwidth=1.0, relheight=1.0)
+        gui.stop_button.lift.assert_called()
+
+    def test_covers_the_whole_control_frame(self, gui):
+        gui._on_up()
+        kwargs = gui.stop_button.place.call_args.kwargs
+        assert kwargs["relwidth"] == 1.0 and kwargs["relheight"] == 1.0
+
+    def test_hidden_at_rest(self, gui):
+        assert not gui.stop_button.place.called
+
+    def test_pressing_it_asks_the_controller_to_stop(self, gui, controller):
+        gui._on_stop()
+        controller.stop.assert_called_once()
+
+    def test_disappears_once_the_move_ends(self, gui, controller):
+        gui._on_up()
+        controller.is_moving = False
+        gui._poll_movement()
+        gui.stop_button.place_forget.assert_called()
+
+    def test_stays_while_the_move_runs(self, gui, controller):
+        gui._on_up()
+        controller.is_moving = True
+        gui._poll_movement()
+        assert not gui.stop_button.place_forget.called
+
+    def test_both_arrows_live_again_after_a_stop_in_between(self, gui, controller):
+        gui._on_up()
+        controller.is_moving = False
+        controller.at_top = False
+        controller.at_bottom = False
+        controller.position_fraction = 0.4
+        gui.up_button.configure.reset_mock()
+        gui.down_button.configure.reset_mock()
+        gui._poll_movement()
+        assert "normal" in _states(gui.up_button)
+        assert "normal" in _states(gui.down_button)
+
+    def test_no_rope_prompt_after_a_stop_in_between(self, gui, controller, monkeypatch):
+        """'Bett oben' would be wrong and unsafe when the bed hangs half way."""
+        from bedliftcontrol import gui as module
+
+        box = MagicMock()
+        monkeypatch.setattr(module, "messagebox", box)
+        gui._move_context = MoveContext.UP
+        controller.is_moving = False
+        controller.at_top = False
+        gui._poll_movement()
+        assert not box.showinfo.called
+
+    def test_rope_prompt_when_the_top_is_actually_reached(self, gui, controller, monkeypatch):
+        from bedliftcontrol import gui as module
+
+        box = MagicMock()
+        monkeypatch.setattr(module, "messagebox", box)
+        gui._move_context = MoveContext.UP
+        controller.is_moving = False
+        controller.at_top = True
+        gui._poll_movement()
+        box.showinfo.assert_called_once()
+
+
+class TestIconTableWindow:
+    """The 28 row table is taller than the Pi's 480px panel, so it scrolls."""
+
+    def test_fits_the_pi_panel(self, gui):
+        from bedliftcontrol.gui import ICON_TABLE_PAD
+
+        visible = gui._icon_table_visible_height(480, 28)
+        window_height = visible + 2 * ICON_TABLE_PAD
+        assert window_height + 30 <= 480, "must leave room for the title bar too"
+
+    def test_shows_everything_when_the_screen_is_big_enough(self, gui):
+        from bedliftcontrol.gui import ICON_TABLE_ROW_PITCH
+
+        assert gui._icon_table_visible_height(1050, 28) == 29 * ICON_TABLE_ROW_PITCH
+
+    def test_caps_at_the_screen_on_a_small_panel(self, gui):
+        from bedliftcontrol.gui import ICON_TABLE_ROW_PITCH
+
+        assert gui._icon_table_visible_height(480, 28) < 29 * ICON_TABLE_ROW_PITCH
+
+    def test_never_collapses_below_one_row(self, gui):
+        from bedliftcontrol.gui import ICON_TABLE_ROW_PITCH
+
+        assert gui._icon_table_visible_height(100, 28) == ICON_TABLE_ROW_PITCH
+
+    def test_more_rows_never_make_a_taller_window_than_the_screen_allows(self, gui):
+        from bedliftcontrol.gui import ICON_TABLE_PAD
+
+        for rows in (1, 28, 200):
+            assert gui._icon_table_visible_height(480, rows) + 2 * ICON_TABLE_PAD + 30 <= 480
+
+    def test_uses_a_scrollable_frame(self, gui):
+        import customtkinter
+
+        customtkinter.CTkScrollableFrame.reset_mock()
+        gui._weather_icons_window()
+        assert customtkinter.CTkScrollableFrame.called
