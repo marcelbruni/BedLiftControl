@@ -285,7 +285,7 @@ class TestClock:
         gui._clock_text = None
         gui._update_clock()
         gui.clock_date.configure.assert_any_call(text="Dienstag, 8. September 2026")
-        gui.clock_time.configure.assert_any_call(text="12:08")
+        gui.clock_time.configure.assert_any_call(text="12:08:00")
 
     def test_keeps_ticking_without_a_weather_reading(self, gui, weather, monkeypatch):
         """No internet means _refresh_weather returns early - the clock must not care."""
@@ -298,9 +298,22 @@ class TestClock:
         monkeypatch.setattr(module.clock, "now", lambda: datetime(2026, 9, 8, 12, 8))
         gui._clock_text = None
         gui._update_clock()
-        gui.clock_time.configure.assert_any_call(text="12:08")
+        gui.clock_time.configure.assert_any_call(text="12:08:00")
 
-    def test_does_not_redraw_within_the_same_minute(self, gui, monkeypatch):
+    def test_does_not_redraw_twice_within_the_same_second(self, gui, monkeypatch):
+        from datetime import datetime
+
+        from bedliftcontrol import gui as module
+
+        monkeypatch.setattr(module.clock, "now", lambda: datetime(2026, 9, 8, 12, 8, 1, 100000))
+        gui._clock_text = None
+        gui._update_clock()
+        gui.clock_time.configure.reset_mock()
+        monkeypatch.setattr(module.clock, "now", lambda: datetime(2026, 9, 8, 12, 8, 1, 900000))
+        gui._update_clock()
+        assert not gui.clock_time.configure.called
+
+    def test_redraws_when_the_second_ticks(self, gui, monkeypatch):
         from datetime import datetime
 
         from bedliftcontrol import gui as module
@@ -309,22 +322,20 @@ class TestClock:
         gui._clock_text = None
         gui._update_clock()
         gui.clock_time.configure.reset_mock()
-        monkeypatch.setattr(module.clock, "now", lambda: datetime(2026, 9, 8, 12, 8, 59))
+        monkeypatch.setattr(module.clock, "now", lambda: datetime(2026, 9, 8, 12, 8, 2))
         gui._update_clock()
-        assert not gui.clock_time.configure.called
+        gui.clock_time.configure.assert_any_call(text="12:08:02")
 
-    def test_redraws_when_the_minute_flips(self, gui, monkeypatch):
+    @pytest.mark.parametrize(
+        "microsecond, expected",
+        [(0, 1000), (250000, 750), (900000, 100), (999000, 50)],
+    )
+    def test_tick_aims_at_the_next_second_boundary(self, gui, microsecond, expected):
+        """A fixed 1000ms interval would drift and eventually skip a displayed second."""
         from datetime import datetime
 
-        from bedliftcontrol import gui as module
-
-        monkeypatch.setattr(module.clock, "now", lambda: datetime(2026, 9, 8, 12, 8))
-        gui._clock_text = None
-        gui._update_clock()
-        gui.clock_time.configure.reset_mock()
-        monkeypatch.setattr(module.clock, "now", lambda: datetime(2026, 9, 8, 12, 9))
-        gui._update_clock()
-        gui.clock_time.configure.assert_any_call(text="12:09")
+        moment = datetime(2026, 9, 8, 12, 8, 1, microsecond)
+        assert gui._ms_to_next_second(moment) == expected
 
     def test_clock_does_not_touch_the_weather_blocks(self, gui, monkeypatch):
         from datetime import datetime

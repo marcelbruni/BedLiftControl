@@ -187,6 +187,48 @@ läuft, kann der alte Projektordner gelöscht werden.
 
 ---
 
+### 12. Uhrzeit: Systemuhr setzen lassen (optional)
+
+Der Raspberry Pi hat keine batteriegepufferte Echtzeituhr. Ohne Netz startet er
+mit der Zeit, die er zuletzt gesehen hat.
+
+**Die App zeigt trotzdem immer die richtige Zeit.** Sie holt sich stündlich einen
+Zeitstempel aus dem Internet, merkt sich die Abweichung zur Maschinenuhr und
+rechnet sie auf die Anzeige. Ohne Netz läuft sie mit der zuletzt gemessenen
+Abweichung weiter. Dafür ist nichts einzurichten.
+
+Damit auch der **Rest des Systems** (Logs, Dateidaten, cron) die richtige Zeit
+bekommt, darf die App die Systemuhr stellen. Das braucht einmalig ein sudo-Recht:
+
+```bash
+sudo visudo -f /etc/sudoers.d/bedliftcontrol
+```
+
+Diese Zeile eintragen (`pi` durch den eigenen Benutzernamen ersetzen):
+
+```
+pi ALL=(root) NOPASSWD: /usr/bin/date
+```
+
+Prüfen, dass es greift — der Befehl darf nicht nach einem Passwort fragen:
+
+```bash
+sudo -n date -u -s "$(date -u +'%Y-%m-%d %H:%M:%S')"
+```
+
+Ohne diesen Eintrag passiert nichts Schlimmes: der Versuch scheitert leise, es
+landet eine Warnung im Log, und die Anzeige in der App bleibt korrekt.
+
+> **Der übliche Weg ist NTP.** Wenn der Pi Netz hat, stellt `systemd-timesyncd`
+> die Uhr von selbst und genauer als diese Korrektur. Prüfen mit
+> `timedatectl status` (`NTP service: active`, `System clock synchronized: yes`).
+> Ist NTP aktiv und synchron, weist es das Setzen per `date` unter Umständen ab —
+> das ist in Ordnung, dann macht es NTP ohnehin schon richtig. Die Korrektur in
+> der App ist das Netz darunter für alles, was vor dem ersten NTP-Sync passiert
+> oder wenn der Pi tagelang offline im Auto steht.
+
+---
+
 ## Update
 
 Wenn das Projekt bereits per git auf dem Pi liegt und am Entwicklungsrechner

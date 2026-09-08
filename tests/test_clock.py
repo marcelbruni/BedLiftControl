@@ -40,17 +40,17 @@ class TestFormatTime:
     @pytest.mark.parametrize(
         "moment, expected",
         [
-            (datetime(2026, 9, 8, 12, 8), "12:08"),
-            (datetime(2026, 9, 8, 0, 0), "00:00"),
-            (datetime(2026, 9, 8, 9, 5), "09:05"),
-            (datetime(2026, 9, 8, 23, 59), "23:59"),
+            (datetime(2026, 9, 8, 12, 8, 45), "12:08:45"),
+            (datetime(2026, 9, 8, 0, 0, 0), "00:00:00"),
+            (datetime(2026, 9, 8, 9, 5, 7), "09:05:07"),
+            (datetime(2026, 9, 8, 23, 59, 59), "23:59:59"),
         ],
     )
     def test_zero_padded_24_hour(self, moment, expected):
         assert format_time(moment) == expected
 
-    def test_seconds_are_not_shown(self):
-        assert format_time(datetime(2026, 9, 8, 12, 8, 45)) == "12:08"
+    def test_microseconds_are_not_shown(self):
+        assert format_time(datetime(2026, 9, 8, 12, 8, 45, 999999)) == "12:08:45"
 
 
 class TestNow:

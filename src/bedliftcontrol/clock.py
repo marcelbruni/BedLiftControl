@@ -43,8 +43,8 @@ def format_date(moment: datetime) -> str:
 
 
 def format_time(moment: datetime) -> str:
-    """24 hour clock without seconds, e.g. '08:05'."""
-    return f"{moment.hour:02d}:{moment.minute:02d}"
+    """24 hour clock with seconds, e.g. '08:05:09'."""
+    return f"{moment.hour:02d}:{moment.minute:02d}:{moment.second:02d}"
 
 
 def now() -> datetime:

@@ -9,6 +9,7 @@ import customtkinter as ctk
 
 from bedliftcontrol import clock, icons
 from bedliftcontrol.controller import BedController
+from bedliftcontrol.timesync import TimeSync
 from bedliftcontrol.weather import WEATHER_CODES, WeatherService
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,7 @@ CORRECTION_BUTTON_HEIGHT = 90
 
 POLL_INTERVAL_MS = 100
 WEATHER_UI_REFRESH_MS = 5000
-CLOCK_TICK_MS = 1000  # the display shows minutes; ticking every second keeps the flip prompt
+CLOCK_TICK_MS = 1000  # the display shows seconds, so it has to tick once a second
 FORECAST_COL_WIDTH = 50
 # Emojis must be drawn with an emoji font, otherwise Tk measures them with the
 # default (Roboto) font and renders them wider, which shifts them off-center.
@@ -65,9 +66,12 @@ class MoveContext(Enum):
 
 
 class BedGui:
-    def __init__(self, controller: BedController, weather: WeatherService):
+    def __init__(self, controller: BedController, weather: WeatherService,
+                 timesync: TimeSync | None = None):
         self.controller = controller
         self.weather = weather
+        # own default so existing callers keep working; it touches no network until started
+        self.timesync = timesync if timesync is not None else TimeSync()
         self._move_context: MoveContext | None = None
         self._bar_fill_level = 0.0
         self._clock_text = None
@@ -342,13 +346,19 @@ class BedGui:
         self.clock_date.pack(side="right")
 
     def _update_clock(self) -> None:
-        moment = clock.now()
+        moment = self.timesync.now()
         text = (clock.format_date(moment), clock.format_time(moment))
-        if text != self._clock_text:  # a minute lasts 60 ticks, only redraw on a change
+        if text != self._clock_text:  # guards against two ticks landing in one second
             self._clock_text = text
             self.clock_date.configure(text=text[0])
             self.clock_time.configure(text=text[1])
-        self.app.after(CLOCK_TICK_MS, self._update_clock)
+        self.app.after(self._ms_to_next_second(moment), self._update_clock)
+
+    @staticmethod
+    def _ms_to_next_second(moment) -> int:
+        """A fixed 1000ms interval slowly drifts off the second boundary and then skips
+        a displayed second. Aiming at the next boundary instead keeps the tick honest."""
+        return max(50, CLOCK_TICK_MS - moment.microsecond // 1000)
 
     # --- block 1: current conditions ---------------------------------------
     # Owns self.current_frame and nothing outside it, so it can be rebuilt, restyled or
