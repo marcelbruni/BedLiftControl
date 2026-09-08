@@ -13,11 +13,9 @@ weder Login noch Token.
 
 ## Vorbereitung
 
-> ⚠️ **Bett ganz runterfahren, bevor du anfängst.**
-> Die Installation startet mit dem gespeicherten Zustand „Bett unten"
-> (`bed_up: false` in `data/config.json`). Ist das Bett real oben, die App aber
-> auf „unten" gesetzt, fahren die Motoren beim nächsten „Runter" gegen den
-> Anschlag.
+> ⚠️ **Bett ganz hochfahren, bevor du anfängst.**
+> Die Installation startet mit dem gespeicherten Zustand „Bett oben"
+> (`bed_up: true` in `data/config.json`, der Standardwert).
 
 Ausserdem: **Internet am Pi** (z. B. Handy-Tethering). Nötig für das Klonen und
 das Installieren der Pakete — danach läuft die App offline.
@@ -193,6 +191,10 @@ läuft, kann der alte Projektordner gelöscht werden.
 
 Wenn das Projekt bereits per git auf dem Pi liegt und am Entwicklungsrechner
 Änderungen gepusht wurden:
+
+> ⚠️ Auch hier gilt: **Bett vorher ganz hochfahren.** Die Zeile
+> `git checkout -- data/config.json` setzt die Bettposition auf den
+> Standardwert „oben" zurück.
 
 ```bash
 cd ~/BedLiftControl

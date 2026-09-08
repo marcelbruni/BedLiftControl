@@ -32,7 +32,7 @@ class TestConfig:
         config = Config.load(str(tmp_path / "does_not_exist.json"))
         assert config.total_steps == 28000
         assert config.speed_pps == 800.0
-        assert config.bed_up is False
+        assert config.bed_up is True
 
     def test_save_then_load_roundtrip(self, tmp_path):
         path = str(tmp_path / "config.json")

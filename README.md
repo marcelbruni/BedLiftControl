@@ -125,7 +125,7 @@ All settings live in a single file, `data/config.json`:
 |---------------|------------------------------------------|
 | `total_steps` | Steps for a full up/down travel          |
 | `speed_pps`   | Motor speed in pulses per second         |
-| `bed_up`      | Whether the bed is currently raised      |
+| `bed_up`      | Whether the bed is currently raised (default: `true`) |
 
 The file is written automatically when settings change or the bed is moved.
 

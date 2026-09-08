@@ -17,13 +17,14 @@ CONFIG_FILE = str(Path(__file__).resolve().parents[2] / "data" / "config.json")
 
 DEFAULT_TOTAL_STEPS = 28000
 DEFAULT_SPEED_PPS = 800.0
+DEFAULT_BED_UP = True
 
 
 @dataclass
 class Config:
     total_steps: int = DEFAULT_TOTAL_STEPS
     speed_pps: float = DEFAULT_SPEED_PPS
-    bed_up: bool = False
+    bed_up: bool = DEFAULT_BED_UP
     path: str = field(default=CONFIG_FILE, compare=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
 
