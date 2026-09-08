@@ -164,11 +164,11 @@ class TestPollMovement:
     def test_progress_follows_the_absolute_position(self, gui, controller):
         """A move starting half way up must not send the bar back to the bottom."""
         controller.is_moving = True
-        controller.position_fraction = 0.6
+        controller.position_fraction = 0.6  # 60% up, so 40% down
         controller.progress = 0.1  # per-move progress, deliberately different
         gui._move_context = MoveContext.UP
         gui._poll_movement()
-        gui.progress_label.configure.assert_any_call(text="60%")
+        gui.progress_label.configure.assert_any_call(text="40%")
 
 
 class TestProgressBar:
@@ -562,3 +562,164 @@ class TestIconTableWindow:
         customtkinter.CTkScrollableFrame.reset_mock()
         gui._weather_icons_window()
         assert customtkinter.CTkScrollableFrame.called
+
+
+class TestDescentPercent:
+    """The number counts the descent: 0% parked at the top, 100% all the way down."""
+
+    @pytest.mark.parametrize(
+        "position_fraction, expected",
+        [(1.0, 0), (0.75, 25), (0.5, 50), (0.25, 75), (0.0, 100)],
+    )
+    def test_inverted_against_the_position(self, gui, position_fraction, expected):
+        assert gui._descent_percent(position_fraction) == expected
+
+    def test_counts_up_while_lowering(self, gui, controller):
+        controller.is_moving = True
+        shown = []
+        gui.progress_label.configure.side_effect = lambda **kwargs: shown.append(kwargs.get("text"))
+        for fraction in (1.0, 0.6, 0.2, 0.0):  # bed travelling down
+            controller.position_fraction = fraction
+            gui._poll_movement()
+        assert shown == ["0%", "40%", "80%", "100%"]
+
+    def test_counts_down_while_raising(self, gui, controller):
+        controller.is_moving = True
+        shown = []
+        gui.progress_label.configure.side_effect = lambda **kwargs: shown.append(kwargs.get("text"))
+        for fraction in (0.0, 0.4, 0.8, 1.0):  # bed travelling up
+            controller.position_fraction = fraction
+            gui._poll_movement()
+        assert shown == ["100%", "60%", "20%", "0%"]
+
+
+class TestDescentPrompt:
+    """The 'switch the motors on and release the ropes' note only fits a bed parked up."""
+
+    @pytest.fixture
+    def box(self, monkeypatch):
+        from bedliftcontrol import gui as module
+
+        fake = MagicMock()
+        monkeypatch.setattr(module, "messagebox", fake)
+        return fake
+
+    def test_shown_when_starting_from_the_top(self, gui, controller, box):
+        controller.at_top = True
+        gui._on_down()
+        box.showinfo.assert_called_once()
+
+    def test_not_shown_when_carrying_on_after_a_stop(self, gui, controller, box):
+        controller.at_top = False
+        controller.at_bottom = False
+        gui._on_down()
+        assert not box.showinfo.called
+
+    def test_the_move_still_starts_without_the_prompt(self, gui, controller, box):
+        controller.at_top = False
+        gui._on_down()
+        controller.run_async.assert_called_once_with(controller.move_down)
+
+    def test_going_up_never_prompts(self, gui, controller, box):
+        gui._on_up()
+        assert not box.showinfo.called
+
+
+class TestStopButtonLabel:
+    def test_uses_a_smaller_font_than_the_arrows(self):
+        """STOP is four glyphs; at the arrow size it is 348px wide in a 180px button."""
+        from bedliftcontrol.gui import ARROW_FONT_SIZE, STOP_FONT_SIZE
+
+        assert STOP_FONT_SIZE < ARROW_FONT_SIZE
+
+    def test_the_label_fits_the_button(self):
+        import tkinter
+        import tkinter.font as tkfont
+
+        from bedliftcontrol.gui import STOP_FONT_SIZE
+
+        root = tkinter.Tk()
+        root.withdraw()
+        try:
+            width = tkfont.Font(family="Roboto", size=STOP_FONT_SIZE, weight="bold").measure("STOP")
+        finally:
+            root.destroy()
+        assert width <= 160, f"STOP renders {width}px into a 180px button"
+
+
+class TestEndStopPrompts:
+    """The prompts that bracket a full travel: motors on before, motors off after."""
+
+    @pytest.fixture
+    def box(self, monkeypatch):
+        from bedliftcontrol import gui as module
+
+        fake = MagicMock()
+        monkeypatch.setattr(module, "messagebox", fake)
+        return fake
+
+    # --- starting up from the very bottom ---------------------------------
+
+    def test_asks_before_leaving_the_bottom(self, gui, controller, box):
+        controller.at_bottom = True
+        box.askokcancel.return_value = True
+        gui._on_up()
+        box.askokcancel.assert_called_once_with("Bett hochfahren", "Motoren einschalten.")
+
+    def test_confirming_starts_the_move(self, gui, controller, box):
+        controller.at_bottom = True
+        box.askokcancel.return_value = True
+        gui._on_up()
+        controller.run_async.assert_called_once_with(controller.move_up)
+
+    def test_dismissing_the_dialog_changes_nothing(self, gui, controller, box):
+        """Closing the window with X reports False, and then nothing may move."""
+        controller.at_bottom = True
+        box.askokcancel.return_value = False
+        gui._on_up()
+        assert not controller.run_async.called
+        assert gui._move_context is None
+        assert not gui.stop_button.place.called, "no stop button without a movement"
+
+    def test_no_question_when_carrying_on_after_a_stop(self, gui, controller, box):
+        controller.at_bottom = False
+        controller.at_top = False
+        gui._on_up()
+        assert not box.askokcancel.called
+        controller.run_async.assert_called_once_with(controller.move_up)
+
+    # --- arriving at the very bottom --------------------------------------
+
+    def test_says_good_night_at_the_bottom(self, gui, controller, box):
+        controller.is_moving = False
+        controller.at_bottom = True
+        gui._move_context = MoveContext.DOWN
+        gui._poll_movement()
+        box.showinfo.assert_called_once_with("Bett unten", "Motoren ausschalten. Gute Nacht!")
+
+    def test_no_good_night_after_a_stop_in_between(self, gui, controller, box):
+        controller.is_moving = False
+        controller.at_bottom = False
+        controller.at_top = False
+        gui._move_context = MoveContext.DOWN
+        gui._poll_movement()
+        assert not box.showinfo.called
+
+    def test_no_good_night_when_arriving_at_the_top(self, gui, controller, box):
+        controller.is_moving = False
+        controller.at_top = True
+        controller.at_bottom = False
+        gui._move_context = MoveContext.UP
+        gui._poll_movement()
+        box.showinfo.assert_called_once_with(
+            "Bett oben", "Sicherungsseile anbringen und Motoren ausschalten!"
+        )
+
+    def test_the_two_arrival_prompts_never_both_fire(self, gui, controller, box):
+        """at_top and at_bottom are mutually exclusive, but the branch must be too."""
+        controller.is_moving = False
+        controller.at_top = True
+        controller.at_bottom = True  # nonsense state, e.g. total_steps 0
+        gui._move_context = MoveContext.DOWN
+        gui._poll_movement()
+        assert box.showinfo.call_count <= 1

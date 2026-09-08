@@ -17,8 +17,8 @@ network this was developed on).
 Accuracy: the Date header has one second resolution, so the true server time lies
 somewhere inside that second - half a second is added back to centre the estimate. The
 round trip is measured and its midpoint used as the local reference, which removes most
-of the network latency. What remains is well under a second, which is far more than
-good enough for a clock that displays minutes.
+of the network latency. What remains is comfortably under a second, which the display
+(hours, minutes, seconds) cannot resolve anyway.
 """
 
 import logging
@@ -41,6 +41,12 @@ HTTP_TIMEOUT = 8
 HEADER_RESOLUTION = timedelta(seconds=0.5)
 # Below this the machine clock is fine and rewriting it would be pointless churn.
 SYSTEM_CLOCK_THRESHOLD = timedelta(seconds=2)
+
+
+def format_offset(offset: timedelta) -> str:
+    """Readable seconds. timedelta renders a small negative value as '-1 day, 23:59:59.89',
+    which in a log line reads like a catastrophe rather than 110ms behind."""
+    return f"{offset.total_seconds():+.3f}s"
 
 
 def fetch_internet_utc(url: str = TIME_URL, timeout: int = HTTP_TIMEOUT) -> tuple[datetime, datetime]:
@@ -86,7 +92,7 @@ def set_system_clock(offset: timedelta) -> bool:
     if result.returncode != 0:
         logger.warning("Setting the system clock failed: %s", result.stderr.strip() or result.returncode)
         return False
-    logger.info("System clock set to %s UTC (was off by %s)", stamp, offset)
+    logger.info("System clock set to %s UTC (was off by %s)", stamp, format_offset(offset))
     return True
 
 
@@ -129,7 +135,7 @@ class TimeSync:
         with self._lock:
             self.offset = offset
             self.last_sync = clock.now()
-        logger.info("Time synced, machine clock is off by %s", offset)
+        logger.info("Time synced, machine clock is off by %s", format_offset(offset))
         if self.adjust_system_clock and abs(offset) >= SYSTEM_CLOCK_THRESHOLD:
             if set_system_clock(offset):
                 # the machine clock now carries the correction itself - keeping the

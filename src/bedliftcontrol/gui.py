@@ -23,6 +23,9 @@ STUB_TRIM_PX = 10  # shortens that stub; converted to a fraction of the track at
 ICON_HEIGHT = 21  # matches the emoji glyph height; trimmed off the label's empty top so
                   # the square label stays inside the bar's rounded top cap
 ARROW_FONT_SIZE = 96
+# "STOP" is four glyphs wide, not one arrow: at the arrow size it measures 348px in
+# a 180px button and gets clipped on both sides. 40 measures 143px.
+STOP_FONT_SIZE = 40
 BUTTON_COLOR = "#2fa572"
 BUTTON_DISABLED_COLOR = "#333333"
 STOP_BUTTON_COLOR = "#c62828"
@@ -146,7 +149,8 @@ class BedGui:
         self.down_button.pack(side="bottom", fill="both", expand=True)
         # built once and placed over both arrows while a movement runs
         self.stop_button = ctk.CTkButton(
-            self.control_frame, text="STOP", font=arrow_font, width=180,
+            self.control_frame, text="STOP",
+            font=ctk.CTkFont(size=STOP_FONT_SIZE, weight="bold"), width=180,
             fg_color=STOP_BUTTON_COLOR, hover_color=STOP_BUTTON_HOVER_COLOR,
             command=self._on_stop,
         )
@@ -185,6 +189,15 @@ class BedGui:
         relheight -= self._stub_trim() * (1.0 - fraction)
         self.progress_fill.place(relx=0, rely=0, relwidth=1.0, relheight=relheight, anchor="nw")
 
+    @staticmethod
+    def _descent_percent(position_fraction: float) -> int:
+        """How far down the bed is: 0% parked at the top, 100% all the way down.
+
+        Inverted against the position so it counts up while lowering and down while
+        raising, which matches the bar - full green is the bed at the bottom.
+        """
+        return round((1.0 - position_fraction) * 100)
+
     def _update_move_buttons(self) -> None:
         """An arrow is only dead at the very end of its travel; a stop in between leaves
         both live, so the bed can carry on or turn back."""
@@ -216,12 +229,22 @@ class BedGui:
     def _on_up(self) -> None:
         if self.controller.is_moving:
             return
+        # Parked at the bottom the motors are off, so ask before anything moves.
+        # askokcancel, not showinfo: it is the one that reliably reports a dismissed
+        # dialog as False on both Windows and the Pi, and closing it must change nothing.
+        if self.controller.at_bottom:
+            if not messagebox.askokcancel("Bett hochfahren", "Motoren einschalten."):
+                return
         self._start_move(MoveContext.UP, self.controller.move_up)
 
     def _on_down(self) -> None:
         if self.controller.is_moving:
             return
-        messagebox.showinfo("Bett herunterfahren", "Motoren einschalten und Sicherungsseile lösen!")
+        # only worth saying when the bed is actually parked at the top: that is when the
+        # ropes are attached and the motors are off. Carrying on after a stop in between
+        # means both are already done.
+        if self.controller.at_top:
+            messagebox.showinfo("Bett herunterfahren", "Motoren einschalten und Sicherungsseile lösen!")
         self._start_move(MoveContext.DOWN, self.controller.move_down)
 
     def _poll_movement(self) -> None:
@@ -231,17 +254,19 @@ class BedGui:
         if self.controller.is_moving:
             fraction = self.controller.position_fraction
             self._set_bar(fraction)
-            self.progress_label.configure(text=f"{round(fraction * 100)}%")
+            self.progress_label.configure(text=f"{self._descent_percent(fraction)}%")
             self._schedule_poll()
             return
         self._hide_stop_button()
         self.progress_label.configure(text="")
         self._set_bar(self.controller.position_fraction)
         self._update_move_buttons()
-        # only prompt for the ropes when the bed really arrived at the top - after a stop
-        # in between it is hanging somewhere and the prompt would be plain wrong
+        # only prompt when the bed really arrived at an end stop - after a stop in
+        # between it is hanging somewhere and either prompt would be plain wrong
         if self._move_context == MoveContext.UP and self.controller.at_top:
             messagebox.showinfo("Bett oben", "Sicherungsseile anbringen und Motoren ausschalten!")
+        elif self._move_context == MoveContext.DOWN and self.controller.at_bottom:
+            messagebox.showinfo("Bett unten", "Motoren ausschalten. Gute Nacht!")
         self._move_context = None
 
     def _correct(self, action) -> None:

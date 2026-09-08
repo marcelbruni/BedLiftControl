@@ -14,6 +14,7 @@ from bedliftcontrol.timesync import (
     SYSTEM_CLOCK_THRESHOLD,
     TimeSync,
     fetch_internet_utc,
+    format_offset,
     set_system_clock,
 )
 
@@ -207,3 +208,24 @@ class TestSystemClock:
         assert set_system_clock(timedelta(hours=1)) is True
         assert recorded["command"][:3] == ["sudo", "-n", "date"]
         assert "-u" in recorded["command"], "the stamp is UTC, so date must be told so"
+
+
+class TestFormatOffset:
+    """A log line has to be readable at a glance during fault finding."""
+
+    @pytest.mark.parametrize(
+        "offset, expected",
+        [
+            (timedelta(seconds=0), "+0.000s"),
+            (timedelta(milliseconds=255), "+0.255s"),
+            (timedelta(milliseconds=-110), "-0.110s"),
+            (timedelta(seconds=-2, milliseconds=-500), "-2.500s"),
+            (timedelta(hours=1), "+3600.000s"),
+        ],
+    )
+    def test_reads_as_seconds(self, offset, expected):
+        assert format_offset(offset) == expected
+
+    def test_a_small_negative_offset_is_not_rendered_as_a_day(self):
+        """str(timedelta(milliseconds=-110)) is '-1 day, 23:59:59.890000'."""
+        assert "day" not in format_offset(timedelta(milliseconds=-110))
