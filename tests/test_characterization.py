@@ -245,3 +245,26 @@ class TestAsyncMovement:
         controller.wait_for_move(timeout=1)
         assert completed.is_set()
         assert controller.is_moving is False
+
+
+class TestConfigKiosk:
+    def test_kiosk_defaults_to_off(self, tmp_path):
+        assert Config.load(str(tmp_path / "missing.json")).kiosk is False
+
+    def test_kiosk_survives_a_save_and_load(self, tmp_path):
+        path = str(tmp_path / "config.json")
+        Config(total_steps=29000, speed_pps=1200.0, bed_up=True, kiosk=True, path=path).save()
+        assert Config.load(path).kiosk is True
+
+    def test_a_config_written_before_kiosk_existed_keeps_its_values(self, tmp_path):
+        """The other keys are read with [], so a missing key must not land in the
+        except branch - that would silently reset steps, speed and bed position."""
+        import json
+
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({"total_steps": 29500, "speed_pps": 1200.0, "bed_up": False}))
+        config = Config.load(str(path))
+        assert config.total_steps == 29500
+        assert config.speed_pps == 1200.0
+        assert config.bed_up is False
+        assert config.kiosk is False

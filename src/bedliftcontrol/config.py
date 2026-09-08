@@ -18,6 +18,7 @@ CONFIG_FILE = str(Path(__file__).resolve().parents[2] / "data" / "config.json")
 DEFAULT_TOTAL_STEPS = 28000
 DEFAULT_SPEED_PPS = 800.0
 DEFAULT_BED_UP = True
+DEFAULT_KIOSK = False
 
 
 @dataclass
@@ -25,6 +26,7 @@ class Config:
     total_steps: int = DEFAULT_TOTAL_STEPS
     speed_pps: float = DEFAULT_SPEED_PPS
     bed_up: bool = DEFAULT_BED_UP
+    kiosk: bool = DEFAULT_KIOSK
     path: str = field(default=CONFIG_FILE, compare=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
 
@@ -40,6 +42,9 @@ class Config:
                 total_steps=int(data["total_steps"]),
                 speed_pps=float(data["speed_pps"]),
                 bed_up=bool(data["bed_up"]),
+                # .get, not [], so a config file written before kiosk mode existed keeps
+                # its other values instead of falling into the except and resetting all
+                kiosk=bool(data.get("kiosk", DEFAULT_KIOSK)),
                 path=str(path),
             )
         except (ValueError, KeyError, OSError) as error:
@@ -62,6 +67,7 @@ class Config:
                 "total_steps": self.total_steps,
                 "speed_pps": self.speed_pps,
                 "bed_up": self.bed_up,
+                "kiosk": self.kiosk,
             },
             indent=2,
         )

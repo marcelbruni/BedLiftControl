@@ -14,6 +14,7 @@ from bedliftcontrol.weather import WEATHER_CODES, WeatherService
 
 logger = logging.getLogger(__name__)
 
+WINDOW_GEOMETRY = "800x420"  # the Pi 7" display is 800x480, kiosk mode takes all of it
 APPEARANCE_MODE = "dark"
 COLOR_THEME = "green"
 PROGRESS_COLOR = "#43a047"
@@ -75,6 +76,7 @@ class BedGui:
         self._move_context: MoveContext | None = None
         self._bar_fill_level = 0.0
         self._clock_text = None
+        self._kiosk_button = None
         self._open_windows: dict[str, object] = {}
         self._steps_value_label = None
         self._speed_value_label = None
@@ -88,7 +90,9 @@ class BedGui:
 
         self.app = ctk.CTk()
         self.app.title("Steuerung Bettmotoren")
-        self.app.geometry("800x420")
+        self.app.geometry(WINDOW_GEOMETRY)
+        # a touch display has no keyboard, but on a dev machine Escape is a quick way out
+        self.app.bind("<Escape>", lambda _event: self._leave_kiosk())
 
         # bottom action bar
         bottom = ctk.CTkFrame(self.app, corner_radius=0)
@@ -143,6 +147,7 @@ class BedGui:
         self._set_bar(1.0 if self.controller.config.bed_up else 0.0)
         self._update_clock()
         self._refresh_weather()
+        self._apply_window_mode()
 
     @staticmethod
     def _set_enabled(widget, enabled: bool) -> None:
@@ -220,15 +225,22 @@ class BedGui:
     def _toggle_window(self, name: str, builder) -> None:
         window = self._open_windows.get(name)
         if window is not None:
-            self._open_windows.pop(name, None)
-            window.destroy()
+            self._on_window_closed(name)
             return
         window = builder()
         window.protocol("WM_DELETE_WINDOW", lambda: self._on_window_closed(name))
+        # in kiosk mode the main window covers the screen, so a child window would open
+        # behind it - and the settings window is the only way back out on a touch display
+        window.transient(self.app)
+        window.lift()
+        if self.controller.config.kiosk:
+            window.attributes("-topmost", True)
         self._open_windows[name] = window
 
     def _on_window_closed(self, name: str) -> None:
         window = self._open_windows.pop(name, None)
+        if name == "settings":
+            self._kiosk_button = None
         if window is not None:
             window.destroy()
 
@@ -238,7 +250,7 @@ class BedGui:
     def _build_settings_window(self):
         window = ctk.CTkToplevel(self.app)
         window.title("Settings")
-        window.geometry("560x160")
+        window.geometry("560x220")
         content = ctk.CTkFrame(window, fg_color="transparent")
         content.pack(expand=True)
         ctk.CTkLabel(content, text="total steps").grid(row=0, column=0, padx=12, pady=12, sticky="e")
@@ -253,6 +265,9 @@ class BedGui:
         speed_slider.grid(row=1, column=1, padx=12, pady=12)
         self._speed_value_label = ctk.CTkLabel(content, text=str(int(self.controller.config.speed_pps)), width=60)
         self._speed_value_label.grid(row=1, column=2, padx=(4, 0))
+        self._kiosk_button = ctk.CTkButton(content, text=self._kiosk_button_text(), width=300,
+                                           command=self._toggle_kiosk)
+        self._kiosk_button.grid(row=2, column=0, columnspan=3, padx=12, pady=(16, 12))
         return window
 
     def _on_steps_change(self, value) -> None:
@@ -333,6 +348,33 @@ class BedGui:
             self._render_forecast(weather.daily)
             self.weather_updated.configure(text="Stand: " + weather.fetched_at.replace("T", " "))
         self.app.after(WEATHER_UI_REFRESH_MS, self._refresh_weather)
+
+    # --- window mode -------------------------------------------------------
+
+    def _apply_window_mode(self) -> None:
+        """Fullscreen covers the whole 800x480 panel; windowed restores the fixed size."""
+        kiosk = self.controller.config.kiosk
+        self.app.attributes("-fullscreen", kiosk)
+        if not kiosk:
+            self.app.geometry(WINDOW_GEOMETRY)
+
+    def _toggle_kiosk(self) -> None:
+        self.controller.config.kiosk = not self.controller.config.kiosk
+        self.controller.config.save()
+        self._apply_window_mode()
+        self._refresh_kiosk_button()
+
+    def _leave_kiosk(self) -> None:
+        if not self.controller.config.kiosk:
+            return
+        self._toggle_kiosk()
+
+    def _kiosk_button_text(self) -> str:
+        return "Kiosk-Modus ausschalten" if self.controller.config.kiosk else "Kiosk-Modus einschalten"
+
+    def _refresh_kiosk_button(self) -> None:
+        if self._kiosk_button is not None:
+            self._kiosk_button.configure(text=self._kiosk_button_text())
 
     # --- block 3: clock ----------------------------------------------------
     # Owns self.clock_date and self.clock_time, driven by its own timer. It does not go

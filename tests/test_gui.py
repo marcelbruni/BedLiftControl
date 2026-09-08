@@ -55,6 +55,7 @@ def controller():
     fake.config.bed_up = False
     fake.config.total_steps = 28000
     fake.config.speed_pps = 800.0
+    fake.config.kiosk = False
     return fake
 
 
@@ -350,3 +351,74 @@ class TestClock:
         gui._update_clock()
         assert not gui.weather_city.configure.called
         assert not called
+
+
+class TestKioskMode:
+    """Toggling between the fixed window and fullscreen on the Pi's 800x480 panel."""
+
+    def test_starts_windowed_by_default(self, gui, controller):
+        assert controller.config.kiosk is False
+        gui.app.attributes.assert_any_call("-fullscreen", False)
+
+    def test_stored_kiosk_flag_is_applied_on_build(self, controller, weather):
+        controller.config.kiosk = True
+        built = BedGui(controller, weather)
+        built.app.attributes.assert_any_call("-fullscreen", True)
+
+    def test_toggle_turns_it_on_and_persists(self, gui, controller):
+        gui._toggle_kiosk()
+        assert controller.config.kiosk is True
+        controller.config.save.assert_called()
+        gui.app.attributes.assert_any_call("-fullscreen", True)
+
+    def test_toggle_turns_it_off_and_restores_the_window_size(self, gui, controller):
+        from bedliftcontrol.gui import WINDOW_GEOMETRY
+
+        controller.config.kiosk = True
+        gui.app.geometry.reset_mock()
+        gui._toggle_kiosk()
+        assert controller.config.kiosk is False
+        gui.app.geometry.assert_any_call(WINDOW_GEOMETRY)
+
+    def test_escape_leaves_kiosk(self, gui, controller):
+        controller.config.kiosk = True
+        gui._leave_kiosk()
+        assert controller.config.kiosk is False
+
+    def test_escape_does_nothing_when_already_windowed(self, gui, controller):
+        controller.config.kiosk = False
+        controller.config.save.reset_mock()
+        gui._leave_kiosk()
+        assert controller.config.kiosk is False
+        assert not controller.config.save.called, "a no-op must not rewrite the config"
+
+    def test_button_text_follows_the_state(self, gui, controller):
+        controller.config.kiosk = False
+        assert gui._kiosk_button_text() == "Kiosk-Modus einschalten"
+        controller.config.kiosk = True
+        assert gui._kiosk_button_text() == "Kiosk-Modus ausschalten"
+
+    def test_settings_window_offers_the_toggle(self, gui):
+        gui._settings_window()
+        assert gui._kiosk_button is not None
+
+    def test_closing_settings_drops_the_button_reference(self, gui):
+        """_refresh_kiosk_button must not configure a destroyed widget."""
+        gui._settings_window()
+        gui._on_window_closed("settings")
+        assert gui._kiosk_button is None
+        gui._toggle_kiosk()  # must not raise
+
+    def test_child_windows_are_raised_over_a_fullscreen_parent(self, gui, controller):
+        """In kiosk mode the settings window is the only way back out."""
+        controller.config.kiosk = True
+        gui._settings_window()
+        window = gui._open_windows["settings"]
+        window.lift.assert_called()
+        window.attributes.assert_any_call("-topmost", True)
+
+    def test_child_windows_are_not_forced_on_top_when_windowed(self, gui, controller):
+        controller.config.kiosk = False
+        gui._settings_window()
+        window = gui._open_windows["settings"]
+        assert not any(call.args[:1] == ("-topmost",) for call in window.attributes.call_args_list)
