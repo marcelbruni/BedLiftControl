@@ -8,28 +8,41 @@ front/back corrections. Motor pulses are sent over the Raspberry Pi GPIO pins vi
 `RPi.GPIO`.
 
 The code is split into layers: `config` (persistent settings), `controller`
-(motion/hardware logic, no GUI) and `gui` (guizero UI). This keeps the logic
-testable without a Raspberry Pi.
+(motion/hardware logic, no GUI) and `gui` (the CustomTkinter interface). This
+keeps the logic testable without a Raspberry Pi.
 
 Bed movement runs in a background thread, so the UI stays responsive while the
-bed moves. Only one movement runs at a time.
+bed moves. Only one movement runs at a time. A movement can be interrupted with
+the STOP button: the bed decelerates, the reached position is stored, and the
+next movement either finishes the remaining travel or reverses back to where it
+started.
 
 ## Project structure
 
 ```
 BedLiftControl/
 ├── data/
-│   └── config.json          # Persistent settings (steps, speed, bed position)
+│   ├── config.json          # Persistent settings (steps, speed, position, kiosk)
+│   └── weather.json         # Weather cache, written at runtime
+├── deploy/
+│   └── bedliftcontrol.desktop   # Reference autostart entry
 ├── src/
 │   └── bedliftcontrol/
 │       ├── __init__.py
+│       ├── autostart.py     # Installs/removes the desktop autostart entry
+│       ├── clock.py         # Date and time formatting (German, locale independent)
 │       ├── config.py        # Config dataclass, load/save JSON
 │       ├── controller.py    # BedController: motion + GPIO logic (no GUI)
 │       ├── gui.py           # BedGui: CustomTkinter user interface
-│       └── main.py          # Entry point
+│       ├── icons.py         # Canvas-drawn weather icons
+│       ├── main.py          # Entry point
+│       ├── timesync.py      # Keeps the shown clock right when the Pi's is not
+│       └── weather.py       # Location, forecast and the WMO code table
 ├── tests/
+├── DEPLOYMENT.md
 ├── pyproject.toml
 ├── requirements.txt
+├── requirements-dev.txt
 └── README.md
 ```
 
@@ -121,13 +134,20 @@ direction (DIR) pin:
 
 All settings live in a single file, `data/config.json`:
 
-| Key           | Meaning                                  |
-|---------------|------------------------------------------|
-| `total_steps` | Steps for a full up/down travel          |
-| `speed_pps`   | Motor speed in pulses per second         |
-| `bed_up`      | Whether the bed is currently raised (default: `true`) |
+| Key              | Meaning                                                  |
+|------------------|----------------------------------------------------------|
+| `total_steps`    | Steps for a full up/down travel                          |
+| `speed_pps`      | Motor speed in pulses per second                         |
+| `position_steps` | Where the bed stands: `0` fully down, `total_steps` fully up |
+| `bed_up`         | Derived from `position_steps`, not maintained by hand     |
+| `kiosk`          | Fullscreen instead of a window                           |
 
-The file is written automatically when settings change or the bed is moved.
+The file is written automatically when settings change, when the bed is moved and
+when a movement is stopped.
+
+`position_steps` is the single source of truth for the bed position. Editing
+`bed_up` by hand has no effect — it is overwritten from `position_steps` on the
+next save.
 
 ## Weather
 
@@ -136,3 +156,31 @@ the current weather. Location is derived from the public IP (rough, city level) 
 the forecast comes from [Open-Meteo](https://open-meteo.com) — both free and without
 an API key. The last result is cached to `data/weather.json`, so the weather stays
 visible when the connection drops. No configuration is required.
+
+Location and forecast are refreshed every 30 minutes; the display re-reads the
+cached values every 5 seconds. The icons are drawn on a canvas rather than taken
+from emoji, because Unicode has no graded weather glyphs (there is exactly one
+"cloud with rain") and Tk renders emoji monochrome with gaps that differ between
+Windows and the Pi.
+
+## Clock
+
+The panel shows the date and time, corrected against an internet reference.
+
+A Raspberry Pi has no battery backed real time clock, so without a network it
+starts up with whatever time it last saw. The offset between the machine clock and
+the HTTP `Date` header of the weather API is measured hourly and applied to the
+display, which keeps ticking at full accuracy while offline. Where the sudo right
+from [DEPLOYMENT.md](DEPLOYMENT.md) is in place, the system clock is corrected as
+well, once it is off by two seconds or more.
+
+NTP does the same job better whenever it works — this is the fallback for the time
+before the first NTP sync and for networks that block UDP 123, which phone
+tethering and public WiFi often do.
+
+## Kiosk mode
+
+⚙ → "Kiosk-Modus einschalten" switches from the fixed window to fullscreen, which
+is the sensible mode on the Pi's 800×480 panel. The setting is persisted, so the
+Pi comes up in fullscreen. There is no title bar in that mode; the way back is the
+same button, or `Esc` with a keyboard attached.

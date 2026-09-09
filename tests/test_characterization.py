@@ -1,6 +1,6 @@
 """Characterization / behaviour tests for the logic and config layers.
 
-guizero and RPi.GPIO are mocked in conftest.py, so these run on any machine.
+customtkinter and RPi.GPIO are mocked in conftest.py, so these run on any machine.
 """
 
 import threading
