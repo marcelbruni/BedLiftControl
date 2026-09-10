@@ -1,8 +1,10 @@
-"""Fetch, cache and provide the current weather for the main panel.
+"""Fetch, cache and provide the weather for the main panel.
 
-Location comes from the public IP (rough, city level); the forecast from Open-Meteo
-(free, no API key). The last result is cached to disk so something is still shown
-when the internet connection (phone tethering) drops.
+Several locations are offered: the current one, derived from the public IP (rough,
+city level), plus a fixed list of places we travel to. Every refresh fetches all of
+them in a single Open-Meteo request (free, no API key) and caches the lot to disk, so
+switching location works instantly and still shows something once the phone tethering
+drops.
 """
 
 from __future__ import annotations
@@ -22,12 +24,44 @@ WEATHER_FILE = str(Path(__file__).resolve().parents[2] / "data" / "weather.json"
 LOCATION_URL = "https://ipapi.co/json/"
 FORECAST_URL = (
     "https://api.open-meteo.com/v1/forecast"
-    "?latitude={lat}&longitude={lon}&current_weather=true"
+    "?latitude={lats}&longitude={lons}&current_weather=true"
     "&daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
     "&timezone=auto"
 )
 REFRESH_INTERVAL_SECONDS = 1800
+RETRY_INTERVAL_SECONDS = 60
 HTTP_TIMEOUT = 8
+
+
+@dataclass(frozen=True)
+class Location:
+    key: str
+    label: str
+    latitude: float | None = None
+    longitude: float | None = None
+
+    @property
+    def follows_the_phone(self) -> bool:
+        return self.latitude is None or self.longitude is None
+
+
+PHONE_LOCATION = "phone"
+
+# Coordinates looked up once via the Open-Meteo geocoding API. Schilthorn exists twice
+# in that database; this is the Bernese one above Muerren, not the Valais peak.
+LOCATIONS = (
+    Location(PHONE_LOCATION, "Handystandort"),
+    Location("hoefen", "Höfen bei Thun", 46.7210, 7.5644),
+    Location("chatel", "Châtel", 46.2649, 6.8403),
+    Location("lacure", "La Cure", 46.4647, 6.0742),
+    Location("schilthorn", "Schilthorn", 46.5573, 7.8349),
+    Location("cransmontana", "Crans-Montana", 46.3132, 7.4791),
+)
+LOCATIONS_BY_KEY = {location.key: location for location in LOCATIONS}
+
+
+def location_or_default(key: str) -> Location:
+    return LOCATIONS_BY_KEY.get(key, LOCATIONS_BY_KEY[PHONE_LOCATION])
 
 # Open-Meteo WMO weather codes -> (description, icon key). Texts follow the official
 # WMO interpretation wording from https://open-meteo.com/en/docs, in German.
@@ -176,9 +210,8 @@ def _parse_daily(daily_data: dict) -> list:
     return forecast
 
 
-def fetch_weather(lat: float, lon: float, city: str) -> Weather:
-    data = _http_get_json(FORECAST_URL.format(lat=lat, lon=lon))
-    current = data["current_weather"]
+def _parse_weather(entry: dict, city: str) -> Weather:
+    current = entry["current_weather"]
     description, icon = describe_weather_code(int(current["weathercode"]))
     return Weather(
         city=city,
@@ -186,46 +219,137 @@ def fetch_weather(lat: float, lon: float, city: str) -> Weather:
         description=description,
         icon=icon,
         fetched_at=datetime.now().isoformat(timespec="minutes"),
-        daily=_parse_daily(data.get("daily", {})),
+        daily=_parse_daily(entry.get("daily", {})),
     )
 
 
+def fetch_weather_batch(points: list) -> list:
+    """All locations in one request. Open-Meteo answers comma separated coordinates
+    with a JSON list, one entry per point, and a bare object for a single point.
+
+    `points` are (latitude, longitude, city) triples; the result keeps their order.
+    """
+    if not points:
+        return []
+    lats = ",".join(f"{lat:.4f}" for lat, _, _ in points)
+    lons = ",".join(f"{lon:.4f}" for _, lon, _ in points)
+    data = _http_get_json(FORECAST_URL.format(lats=lats, lons=lons))
+    entries = data if isinstance(data, list) else [data]
+    if len(entries) != len(points):
+        raise ValueError(f"requested {len(points)} locations, received {len(entries)}")
+    return [_parse_weather(entry, city) for entry, (_, _, city) in zip(entries, points)]
+
+
 class WeatherService:
-    def __init__(self, path: str = WEATHER_FILE, refresh_interval: int = REFRESH_INTERVAL_SECONDS):
+    def __init__(
+        self,
+        path: str = WEATHER_FILE,
+        refresh_interval: int = REFRESH_INTERVAL_SECONDS,
+        retry_interval: int = RETRY_INTERVAL_SECONDS,
+        selected: str = PHONE_LOCATION,
+    ):
         self.path = path
         self.refresh_interval = refresh_interval
+        self.retry_interval = retry_interval
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self.current: Weather | None = self._load_cache()
+        self._selected = location_or_default(selected).key
+        self._last_phone_position = None
+        self.readings: dict = self._load_cache()
 
-    def _load_cache(self) -> Weather | None:
+    @property
+    def selected(self) -> str:
+        return self._selected
+
+    def select(self, key: str) -> None:
+        self._selected = location_or_default(key).key
+
+    @property
+    def current(self) -> Weather | None:
+        return self.reading_for(self._selected)
+
+    def reading_for(self, key: str) -> Weather | None:
+        with self._lock:
+            return self.readings.get(key)
+
+    def _load_cache(self) -> dict:
         file = Path(self.path)
         if not file.exists():
-            return None
+            return {}
         try:
-            return Weather.from_dict(json.loads(file.read_text(encoding="utf-8")))
-        except (ValueError, KeyError, OSError) as error:
+            data = json.loads(file.read_text(encoding="utf-8"))
+            return {
+                key: Weather.from_dict(value)
+                for key, value in data.get("readings", {}).items()
+                if key in LOCATIONS_BY_KEY
+            }
+        except (ValueError, KeyError, TypeError, AttributeError, OSError) as error:
             logger.warning("Could not read weather cache %s (%s)", self.path, error)
-            return None
+            return {}
 
-    def _save_cache(self, weather: Weather) -> None:
+    def _save_cache(self) -> None:
+        with self._lock:
+            payload = {"readings": {key: value.to_dict() for key, value in self.readings.items()}}
         target = Path(self.path)
         temp = Path(str(target) + ".tmp")
-        temp.write_text(json.dumps(weather.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+        temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(temp, target)
 
     def refresh_once(self) -> bool:
+        keys, points = self._request_points()
+        if not points:
+            return False
         try:
-            lat, lon, city = fetch_location()
-            weather = fetch_weather(lat, lon, city)
+            readings = fetch_weather_batch(points)
         except Exception:  # network boundary: a failed fetch must never crash the app
             logger.warning("Weather refresh failed", exc_info=True)
             return False
         with self._lock:
-            self.current = weather
-        self._save_cache(weather)
+            self.readings.update(dict(zip(keys, readings)))
+        self._save_cache()
+        logger.info("Weather updated for %s", ", ".join(keys))
         return True
+
+    def _request_points(self) -> tuple:
+        """Keys and (latitude, longitude, city) triples for the coming request.
+
+        The phone location is only left out while its position has never been resolved;
+        the fixed places are always fetched.
+        """
+        keys, points = [], []
+        for location in LOCATIONS:
+            if location.follows_the_phone:
+                position = self._phone_position()
+                if position is None:
+                    continue
+                points.append(position)
+            else:
+                points.append((location.latitude, location.longitude, location.label))
+            keys.append(location.key)
+        return keys, points
+
+    def _phone_position(self):
+        """Where the phone is, reusing the last answer when the lookup fails.
+
+        ipapi.co answers HTTP 429 after a handful of calls in quick succession, and a
+        parked vehicle has not moved anyway - so a failed lookup must not cost us the
+        location, only the update of its coordinates.
+        """
+        try:
+            latitude, longitude, city = fetch_location()
+        except Exception:
+            if self._last_phone_position is None:
+                logger.warning("Cannot locate the phone yet, skipping that location", exc_info=True)
+            else:
+                logger.info("Phone location lookup failed, keeping the last known position")
+            return self._last_phone_position
+        self._last_phone_position = (
+            latitude,
+            longitude,
+            city or LOCATIONS_BY_KEY[PHONE_LOCATION].label,
+        )
+        return self._last_phone_position
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -236,8 +360,8 @@ class WeatherService:
 
     def _loop(self) -> None:
         while not self._stop.is_set():
-            self.refresh_once()
-            self._stop.wait(self.refresh_interval)
+            succeeded = self.refresh_once()
+            self._stop.wait(self.refresh_interval if succeeded else self.retry_interval)
 
     def stop(self) -> None:
         self._stop.set()

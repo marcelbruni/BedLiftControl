@@ -16,7 +16,7 @@ def main() -> None:
     )
     config = Config.load()
     controller = BedController(config)
-    weather = WeatherService()
+    weather = WeatherService(selected=config.weather_location)
     timesync = TimeSync()
     gui = BedGui(controller, weather, timesync)
     weather.start()

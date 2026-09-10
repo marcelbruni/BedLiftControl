@@ -72,6 +72,8 @@ def controller():
 def weather():
     fake = MagicMock()
     fake.current = None
+    fake.selected = "phone"
+    fake.readings = {}
     return fake
 
 
@@ -857,3 +859,111 @@ class TestCorrectionClickVersusHold:
         gui._bind_correction(button, controller.correct_front_up, controller.hold_front_up)
         bound = {c.args[0] for c in button.bind.call_args_list}
         assert bound == {"<ButtonPress-1>", "<ButtonRelease-1>"}
+
+
+class TestLocationSelection:
+    """Choosing a location applies the cached reading at once and is remembered."""
+
+    @pytest.fixture
+    def weather_with_readings(self, weather):
+        from bedliftcontrol.weather import Weather
+
+        weather.selected = "phone"
+        weather.readings = {
+            "phone": Weather("Thun", 21.0, "Klarer Himmel", "sun", "2026-09-10T08:00"),
+            "schilthorn": Weather("Schilthorn", -3.0, "Bedeckt", "cloud", "2026-09-10T08:00"),
+        }
+        weather.current = weather.readings["phone"]
+        return weather
+
+    def test_the_button_opens_the_window(self, gui):
+        gui._location_window()
+        assert "location" in gui._open_windows
+
+    def test_one_button_per_location(self, gui):
+        import customtkinter
+
+        from bedliftcontrol.weather import LOCATIONS
+
+        customtkinter.CTkButton.reset_mock()
+        gui._location_window()
+        texts = [c.kwargs.get("text") for c in customtkinter.CTkButton.call_args_list]
+        for location in LOCATIONS:
+            assert location.label in texts
+
+    def test_the_active_location_is_highlighted(self, gui, weather):
+        import customtkinter
+
+        from bedliftcontrol.gui import BUTTON_COLOR, BUTTON_DISABLED_COLOR
+
+        weather.selected = "lacure"
+        customtkinter.CTkButton.reset_mock()
+        gui._location_window()
+        colors = {
+            c.kwargs.get("text"): c.kwargs.get("fg_color")
+            for c in customtkinter.CTkButton.call_args_list
+            if "fg_color" in c.kwargs
+        }
+        assert colors["La Cure"] == BUTTON_COLOR
+        assert colors["Schilthorn"] == BUTTON_DISABLED_COLOR
+
+    def test_selecting_tells_the_service(self, gui, weather):
+        gui._select_location("chatel")
+        weather.select.assert_called_once_with("chatel")
+
+    def test_selecting_is_persisted(self, gui, controller):
+        gui._select_location("chatel")
+        assert controller.config.weather_location == "chatel"
+        controller.config.save.assert_called()
+
+    def test_selecting_closes_the_window(self, gui):
+        gui._location_window()
+        gui._select_location("chatel")
+        assert "location" not in gui._open_windows
+
+    def test_selecting_applies_the_new_reading_at_once(self, gui, weather_with_readings):
+        weather_with_readings.current = weather_with_readings.readings["schilthorn"]
+        gui._select_location("schilthorn")
+        gui.weather_city.configure.assert_any_call(text="Schilthorn")
+
+    def test_selecting_does_not_start_a_second_timer_chain(self, gui, weather_with_readings):
+        """_refresh_weather re-arms the 5s timer; applying must not go through it."""
+        gui.app.after.reset_mock()
+        gui._select_location("schilthorn")
+        weather_calls = [c for c in gui.app.after.call_args_list
+                         if c.args[1] is gui._refresh_weather]
+        assert not weather_calls
+
+
+class TestMissingReading:
+    """A location that has never been fetched must not show the previous one's numbers."""
+
+    def test_shows_the_label_and_says_so(self, gui, weather):
+        weather.current = None
+        weather.selected = "schilthorn"
+        gui._apply_weather()
+        gui.weather_city.configure.assert_any_call(text="Schilthorn")
+        gui.weather_desc.configure.assert_any_call(text="Noch keine Daten")
+
+    def test_clears_the_temperature_and_the_age(self, gui, weather):
+        weather.current = None
+        weather.selected = "schilthorn"
+        gui._apply_weather()
+        gui.weather_temp.configure.assert_any_call(text="")
+        gui.weather_updated.configure.assert_any_call(text="")
+
+    def test_clears_the_forecast_row(self, gui, weather, monkeypatch):
+        weather.current = None
+        weather.selected = "schilthorn"
+        rendered = []
+        monkeypatch.setattr(gui, "_render_forecast", lambda daily: rendered.append(daily))
+        gui._apply_weather()
+        assert rendered == [[]]
+
+    def test_shows_the_placeholder_icon(self, gui, weather, monkeypatch):
+        shown = []
+        monkeypatch.setattr(gui.weather_icon, "show", shown.append)
+        weather.current = None
+        weather.selected = "schilthorn"
+        gui._apply_weather()
+        assert shown == ["unknown"]

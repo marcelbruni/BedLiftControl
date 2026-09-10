@@ -3,5 +3,6 @@
   "speed_pps": 800.0,
   "bed_up": true,
   "kiosk": false,
-  "position_steps": 28000
+  "position_steps": 28000,
+  "weather_location": "cransmontana"
 }

@@ -10,7 +10,7 @@ import customtkinter as ctk
 from bedliftcontrol import clock, icons
 from bedliftcontrol.controller import BedController
 from bedliftcontrol.timesync import TimeSync
-from bedliftcontrol.weather import WEATHER_CODES, WeatherService
+from bedliftcontrol.weather import LOCATIONS, WEATHER_CODES, WeatherService, location_or_default
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,8 @@ CORRECTION_BUTTON_HEIGHT = 90
 # Held longer than this and the correction runs on until the button is let go;
 # released sooner and it is a plain click worth CORRECTION_STEPS.
 CORRECTION_HOLD_DELAY_MS = 400
+LOCATION_BUTTON_WIDTH = 260
+LOCATION_BUTTON_HEIGHT = 44
 
 POLL_INTERVAL_MS = 100
 WEATHER_UI_REFRESH_MS = 5000
@@ -116,6 +118,8 @@ class BedGui:
         self.corrections_button.pack(side="left", padx=4, pady=6)
         ctk.CTkButton(bottom, text="230V on/off", width=120, command=self._not_implemented_window).pack(side="left", padx=4, pady=6)
         ctk.CTkButton(bottom, text="Wetter-Icons", width=120, command=self._weather_icons_window).pack(side="left", padx=4, pady=6)
+        self.location_button = ctk.CTkButton(bottom, text="Ort", width=70, command=self._location_window)
+        self.location_button.pack(side="left", padx=4, pady=6)
         self._build_clock_panel(bottom)
 
         # left vertical bar: empty when the bed is up, fills from the top down as the
@@ -432,6 +436,34 @@ class BedGui:
         ctk.CTkLabel(window, text="not implemented!").pack(padx=20, pady=25)
         return window
 
+    def _location_window(self) -> None:
+        self._toggle_window("location", self._build_location_window)
+
+    def _build_location_window(self):
+        window = ctk.CTkToplevel(self.app)
+        window.title("Ort")
+        content = ctk.CTkFrame(window, fg_color="transparent")
+        content.pack(padx=ICON_TABLE_PAD, pady=ICON_TABLE_PAD)
+        selected = self.weather.selected
+        for row, location in enumerate(LOCATIONS):
+            active = location.key == selected
+            ctk.CTkButton(
+                content,
+                text=location.label,
+                width=LOCATION_BUTTON_WIDTH,
+                height=LOCATION_BUTTON_HEIGHT,
+                fg_color=BUTTON_COLOR if active else BUTTON_DISABLED_COLOR,
+                command=lambda key=location.key: self._select_location(key),
+            ).grid(row=row, column=0, padx=6, pady=4)
+        return window
+
+    def _select_location(self, key: str) -> None:
+        self.weather.select(key)
+        self.controller.config.weather_location = key
+        self.controller.config.save()
+        self._on_window_closed("location")
+        self._apply_weather()
+
     def _weather_icons_window(self) -> None:
         self._toggle_window("weather_icons", self._build_weather_icons_window)
 
@@ -482,13 +514,29 @@ class BedGui:
         return window
 
     def _refresh_weather(self) -> None:
-        """Pull the latest reading and hand it to each block, then re-arm the timer."""
-        weather = self.weather.current
-        if weather is not None:
-            self._update_current_panel(weather)
-            self._render_forecast(weather.daily)
-            self.weather_updated.configure(text="Stand: " + weather.fetched_at.replace("T", " "))
+        self._apply_weather()
         self.app.after(WEATHER_UI_REFRESH_MS, self._refresh_weather)
+
+    def _apply_weather(self) -> None:
+        """Hand the selected reading to both blocks. Separate from the timer above so a
+        location change can apply immediately without starting a second timer chain."""
+        weather = self.weather.current
+        if weather is None:
+            self._show_reading_missing()
+            return
+        self._update_current_panel(weather)
+        self._render_forecast(weather.daily)
+        self.weather_updated.configure(text="Stand: " + weather.fetched_at.replace("T", " "))
+
+    def _show_reading_missing(self) -> None:
+        """A location that has not been fetched yet must not keep showing the previous
+        one's numbers."""
+        self.weather_city.configure(text=location_or_default(self.weather.selected).label)
+        self.weather_icon.show("unknown")
+        self.weather_temp.configure(text="")
+        self.weather_desc.configure(text="Noch keine Daten")
+        self.weather_updated.configure(text="")
+        self._render_forecast([])
 
     # --- window mode -------------------------------------------------------
 

@@ -27,6 +27,7 @@ Die App merkt sich die Bettposition **in Schritten**, nicht nur als oben/unten:
 | `position_steps` | Aktuelle Position: `0` = ganz unten, `total_steps` = ganz oben |
 | `bed_up` | Wird aus `position_steps` abgeleitet, nicht von Hand gepflegt |
 | `kiosk` | Vollbildmodus (siehe Schritt 13) |
+| `weather_location` | Ausgewählter Wetter-Ort, Standard `phone` (Handystandort) |
 
 Ausserdem: **Internet am Pi** (z. B. Handy-Tethering). Nötig für das Klonen und
 das Installieren der Pakete — danach läuft die App offline.

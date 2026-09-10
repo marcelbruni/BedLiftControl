@@ -19,6 +19,7 @@ DEFAULT_TOTAL_STEPS = 28000
 DEFAULT_SPEED_PPS = 800.0
 DEFAULT_BED_UP = True
 DEFAULT_KIOSK = False
+DEFAULT_WEATHER_LOCATION = "phone"
 
 
 @dataclass
@@ -27,6 +28,7 @@ class Config:
     speed_pps: float = DEFAULT_SPEED_PPS
     bed_up: bool = DEFAULT_BED_UP
     kiosk: bool = DEFAULT_KIOSK
+    weather_location: str = DEFAULT_WEATHER_LOCATION
     # 0 = bed fully down, total_steps = fully up. Anything in between is a position
     # the user stopped at, from which the next move continues or reverses.
     position_steps: int = -1  # -1 means "derive from bed_up", see load() and _validate()
@@ -54,6 +56,7 @@ class Config:
                 # its other values instead of falling into the except and resetting all
                 kiosk=bool(data.get("kiosk", DEFAULT_KIOSK)),
                 position_steps=int(data.get("position_steps", -1)),
+                weather_location=str(data.get("weather_location", DEFAULT_WEATHER_LOCATION)),
                 path=str(path),
             )
         except (ValueError, KeyError, OSError) as error:
@@ -88,6 +91,7 @@ class Config:
                 "bed_up": self.bed_up,
                 "kiosk": self.kiosk,
                 "position_steps": self.position_steps,
+                "weather_location": self.weather_location,
             },
             indent=2,
         )

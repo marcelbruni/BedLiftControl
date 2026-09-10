@@ -22,7 +22,7 @@ started.
 ```
 BedLiftControl/
 ├── data/
-│   ├── config.json          # Persistent settings (steps, speed, position, kiosk)
+│   ├── config.json          # Persistent settings (steps, speed, position, kiosk, location)
 │   └── weather.json         # Weather cache, written at runtime
 ├── deploy/
 │   └── bedliftcontrol.desktop   # Reference autostart entry
@@ -141,6 +141,7 @@ All settings live in a single file, `data/config.json`:
 | `position_steps` | Where the bed stands: `0` fully down, `total_steps` fully up |
 | `bed_up`         | Derived from `position_steps`, not maintained by hand     |
 | `kiosk`          | Fullscreen instead of a window                           |
+| `weather_location` | Selected weather location, `phone` follows the public IP |
 
 The file is written automatically when settings change, when the bed is moved and
 when a movement is stopped.
@@ -152,16 +153,26 @@ next save.
 ## Weather
 
 When the Pi has internet (e.g. phone tethering while camping), the main panel shows
-the current weather. Location is derived from the public IP (rough, city level) and
-the forecast comes from [Open-Meteo](https://open-meteo.com) — both free and without
-an API key. The last result is cached to `data/weather.json`, so the weather stays
-visible when the connection drops. No configuration is required.
+the weather from [Open-Meteo](https://open-meteo.com) — free and without an API key.
+No configuration is required.
 
-Location and forecast are refreshed every 30 minutes; the display re-reads the
-cached values every 5 seconds. The icons are drawn on a canvas rather than taken
-from emoji, because Unicode has no graded weather glyphs (there is exactly one
-"cloud with rain") and Tk renders emoji monochrome with gaps that differ between
-Windows and the Pi.
+The "Ort" button picks the location: the current one, derived from the public IP
+(rough, city level), or one of the places we travel to — Höfen bei Thun, Châtel,
+La Cure, Schilthorn, Crans-Montana. Every refresh fetches **all** of them in a single
+request and caches the lot to `data/weather.json`, so switching is instant and the
+last readings stay visible when the connection drops.
+
+A refresh runs every 30 minutes, or every minute while it keeps failing, so the
+weather appears as soon as a connection does. The display re-reads the cached values
+every 5 seconds.
+
+The IP lookup (ipapi.co) answers HTTP 429 after a few calls in quick succession. A
+failed lookup therefore keeps the last known position instead of dropping the phone
+location — a parked vehicle has not moved anyway.
+
+The icons are drawn on a canvas rather than taken from emoji, because Unicode has no
+graded weather glyphs (there is exactly one "cloud with rain") and Tk renders emoji
+monochrome with gaps that differ between Windows and the Pi.
 
 ## Clock
 
