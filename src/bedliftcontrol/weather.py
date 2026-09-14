@@ -247,6 +247,7 @@ class WeatherService:
         refresh_interval: int = REFRESH_INTERVAL_SECONDS,
         retry_interval: int = RETRY_INTERVAL_SECONDS,
         selected: str = PHONE_LOCATION,
+        history=None,
     ):
         self.path = path
         self.refresh_interval = refresh_interval
@@ -256,6 +257,7 @@ class WeatherService:
         self._thread: threading.Thread | None = None
         self._selected = location_or_default(selected).key
         self._last_phone_position = None
+        self.history = history
         self.readings: dict = self._load_cache()
 
     @property
@@ -349,6 +351,8 @@ class WeatherService:
             longitude,
             city or LOCATIONS_BY_KEY[PHONE_LOCATION].label,
         )
+        if self.history is not None:
+            self.history.record_position(latitude, longitude, self._last_phone_position[2])
         return self._last_phone_position
 
     def start(self) -> None:

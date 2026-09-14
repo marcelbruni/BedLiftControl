@@ -2,6 +2,7 @@
 
 import logging
 import sys
+from datetime import datetime
 from enum import Enum
 from tkinter import messagebox
 
@@ -36,6 +37,8 @@ CORRECTION_BUTTON_HEIGHT = 90
 CORRECTION_HOLD_DELAY_MS = 400
 LOCATION_BUTTON_WIDTH = 260
 LOCATION_BUTTON_HEIGHT = 44
+HISTORY_ROW_PITCH = 26
+HISTORY_WIDTH = 420
 
 POLL_INTERVAL_MS = 100
 WEATHER_UI_REFRESH_MS = 5000
@@ -82,9 +85,10 @@ class MoveContext(Enum):
 
 class BedGui:
     def __init__(self, controller: BedController, weather: WeatherService,
-                 timesync: TimeSync | None = None):
+                 timesync: TimeSync | None = None, history=None):
         self.controller = controller
         self.weather = weather
+        self.history = history
         # own default so existing callers keep working; it touches no network until started
         self.timesync = timesync if timesync is not None else TimeSync()
         self._move_context: MoveContext | None = None
@@ -369,7 +373,7 @@ class BedGui:
     def _build_settings_window(self):
         window = ctk.CTkToplevel(self.app)
         window.title("Settings")
-        window.geometry("560x220")
+        window.geometry("560x280")
         content = ctk.CTkFrame(window, fg_color="transparent")
         content.pack(expand=True)
         ctk.CTkLabel(content, text="total steps").grid(row=0, column=0, padx=12, pady=12, sticky="e")
@@ -386,7 +390,10 @@ class BedGui:
         self._speed_value_label.grid(row=1, column=2, padx=(4, 0))
         self._kiosk_button = ctk.CTkButton(content, text=self._kiosk_button_text(), width=300,
                                            command=self._toggle_kiosk)
-        self._kiosk_button.grid(row=2, column=0, columnspan=3, padx=12, pady=(16, 12))
+        self._kiosk_button.grid(row=2, column=0, columnspan=3, padx=12, pady=(16, 6))
+        ctk.CTkButton(content, text="Historie", width=300,
+                      command=self._history_window).grid(row=3, column=0, columnspan=3,
+                                                         padx=12, pady=(6, 12))
         return window
 
     def _on_steps_change(self, value) -> None:
@@ -463,6 +470,49 @@ class BedGui:
         self.controller.config.save()
         self._on_window_closed("location")
         self._apply_weather()
+
+    def _history_window(self) -> None:
+        self._toggle_window("history", self._build_history_window)
+
+    def _build_history_window(self):
+        window = ctk.CTkToplevel(self.app)
+        window.title("Historie")
+        content = ctk.CTkFrame(window, fg_color="transparent")
+        content.pack(padx=ICON_TABLE_PAD, pady=ICON_TABLE_PAD, fill="both", expand=True)
+
+        nights = self.history.nights if self.history is not None else 0
+        ctk.CTkLabel(content, text=f"Übernachtungen: {nights}",
+                     font=ctk.CTkFont(size=22, weight="bold")).pack(pady=(0, 12))
+        ctk.CTkLabel(content, text="Standort-Historie",
+                     font=ctk.CTkFont(size=13, weight="bold")).pack(anchor="w")
+
+        entries = list(reversed(self.history.locations)) if self.history is not None else []
+        visible = self._history_visible_height(window.winfo_screenheight(), len(entries))
+        listing = ctk.CTkScrollableFrame(content, fg_color="transparent",
+                                         width=HISTORY_WIDTH, height=visible)
+        listing.pack(fill="both", expand=True, pady=(4, 0))
+        if not entries:
+            ctk.CTkLabel(listing, text="Noch keine Standorte aufgezeichnet",
+                         text_color="#888888").pack(anchor="w", pady=4)
+        for entry in entries:
+            ctk.CTkLabel(listing, text=self._format_visit(entry), anchor="w",
+                         height=HISTORY_ROW_PITCH).pack(fill="x")
+        return window
+
+    @staticmethod
+    def _history_visible_height(screen_height: int, rows: int) -> int:
+        available = screen_height - ICON_TABLE_SCREEN_MARGIN - 2 * ICON_TABLE_PAD - 110
+        wanted = max(rows, 1) * HISTORY_ROW_PITCH
+        return max(HISTORY_ROW_PITCH, min(wanted, available))
+
+    @staticmethod
+    def _format_visit(visit) -> str:
+        try:
+            moment = datetime.fromisoformat(visit.at)
+            stamp = f"{moment.day:02d}.{moment.month:02d}.{moment.year} {moment.hour:02d}:{moment.minute:02d}"
+        except ValueError:
+            stamp = visit.at
+        return f"{stamp}   {visit.city}   ({visit.latitude:.4f}, {visit.longitude:.4f})"
 
     def _weather_icons_window(self) -> None:
         self._toggle_window("weather_icons", self._build_weather_icons_window)

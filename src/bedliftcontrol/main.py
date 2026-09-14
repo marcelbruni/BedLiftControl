@@ -5,6 +5,7 @@ import logging
 from bedliftcontrol.config import Config
 from bedliftcontrol.controller import BedController
 from bedliftcontrol.gui import BedGui
+from bedliftcontrol.history import History
 from bedliftcontrol.timesync import TimeSync
 from bedliftcontrol.weather import WeatherService
 
@@ -15,10 +16,11 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     config = Config.load()
-    controller = BedController(config)
-    weather = WeatherService(selected=config.weather_location)
+    history = History()
+    controller = BedController(config, history)
+    weather = WeatherService(selected=config.weather_location, history=history)
     timesync = TimeSync()
-    gui = BedGui(controller, weather, timesync)
+    gui = BedGui(controller, weather, timesync, history)
     weather.start()
     timesync.start()
     try:

@@ -435,3 +435,56 @@ class TestPhonePosition:
         monkeypatch.setattr(weather_module, "fetch_weather_batch", _batch())
         WeatherService(path=str(tmp_path / "weather.json")).refresh_once()
         assert len(calls) == 1
+
+
+class TestLocationHistoryHook:
+    """Every resolved phone position is offered to the history."""
+
+    @pytest.fixture
+    def tracker(self, tmp_path):
+        from bedliftcontrol.history import History
+
+        return History(path=str(tmp_path / "history.json"))
+
+    def test_a_resolved_position_is_recorded(self, tmp_path, tracker, monkeypatch):
+        monkeypatch.setattr(weather_module, "fetch_location", lambda: (46.7, 7.6, "Thun"))
+        monkeypatch.setattr(weather_module, "fetch_weather_batch", _batch())
+        service = WeatherService(path=str(tmp_path / "weather.json"), history=tracker)
+        service.refresh_once()
+        assert [entry.city for entry in tracker.locations] == ["Thun"]
+
+    def test_an_unchanged_position_is_not_recorded_twice(self, tmp_path, tracker, monkeypatch):
+        monkeypatch.setattr(weather_module, "fetch_location", lambda: (46.7, 7.6, "Thun"))
+        monkeypatch.setattr(weather_module, "fetch_weather_batch", _batch())
+        service = WeatherService(path=str(tmp_path / "weather.json"), history=tracker)
+        service.refresh_once()
+        service.refresh_once()
+        assert len(tracker.locations) == 1
+
+    def test_a_move_is_recorded(self, tmp_path, tracker, monkeypatch):
+        monkeypatch.setattr(weather_module, "fetch_location", lambda: (46.7, 7.6, "Thun"))
+        monkeypatch.setattr(weather_module, "fetch_weather_batch", _batch())
+        service = WeatherService(path=str(tmp_path / "weather.json"), history=tracker)
+        service.refresh_once()
+        monkeypatch.setattr(weather_module, "fetch_location", lambda: (47.37, 8.55, "Zurich"))
+        service.refresh_once()
+        assert [entry.city for entry in tracker.locations] == ["Thun", "Zurich"]
+
+    def test_a_failed_lookup_records_nothing(self, tmp_path, tracker, monkeypatch):
+        """The reused position is not a fresh observation."""
+        monkeypatch.setattr(weather_module, "fetch_location", lambda: (46.7, 7.6, "Thun"))
+        monkeypatch.setattr(weather_module, "fetch_weather_batch", _batch())
+        service = WeatherService(path=str(tmp_path / "weather.json"), history=tracker)
+        service.refresh_once()
+
+        def boom():
+            raise OSError("429")
+
+        monkeypatch.setattr(weather_module, "fetch_location", boom)
+        service.refresh_once()
+        assert len(tracker.locations) == 1
+
+    def test_without_a_tracker_nothing_breaks(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(weather_module, "fetch_location", lambda: (46.7, 7.6, "Thun"))
+        monkeypatch.setattr(weather_module, "fetch_weather_batch", _batch())
+        WeatherService(path=str(tmp_path / "weather.json")).refresh_once()

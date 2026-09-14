@@ -23,6 +23,7 @@ started.
 BedLiftControl/
 ├── data/
 │   ├── config.json          # Persistent settings (steps, speed, position, kiosk, location)
+│   ├── history.json         # Night counter and location history, written at runtime
 │   └── weather.json         # Weather cache, written at runtime
 ├── deploy/
 │   └── bedliftcontrol.desktop   # Reference autostart entry
@@ -34,6 +35,7 @@ BedLiftControl/
 │       ├── config.py        # Config dataclass, load/save JSON
 │       ├── controller.py    # BedController: motion + GPIO logic (no GUI)
 │       ├── gui.py           # BedGui: CustomTkinter user interface
+│       ├── history.py       # Night counter and location history
 │       ├── icons.py         # Canvas-drawn weather icons
 │       ├── main.py          # Entry point
 │       ├── timesync.py      # Keeps the shown clock right when the Pi's is not
@@ -173,6 +175,21 @@ location — a parked vehicle has not moved anyway.
 The icons are drawn on a canvas rather than taken from emoji, because Unicode has no
 graded weather glyphs (there is exactly one "cloud with rain") and Tk renders emoji
 monochrome with gaps that differ between Windows and the Pi.
+
+## Tracking
+
+⚙ → "Historie" shows two long lived numbers, kept in `data/history.json`:
+
+- **Übernachtungen** — one per night. Counted when the bed comes back up from having
+  been all the way down, so lowering in the evening and raising in the morning is
+  exactly one. Interrupted moves and reboots in between do not disturb it, and raising
+  a bed that was never lowered counts nothing.
+- **Standort-Historie** — the phone position with a timestamp, appended whenever it
+  differs from the one before it. Capped at the newest 1000 entries.
+
+The file is separate from `config.json` on purpose: that one is tracked by git and the
+update procedure resets it, which would wipe the counter. `history.json` is gitignored
+and survives updates.
 
 ## Clock
 

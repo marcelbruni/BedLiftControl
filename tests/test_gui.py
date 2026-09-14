@@ -967,3 +967,87 @@ class TestMissingReading:
         weather.selected = "schilthorn"
         gui._apply_weather()
         assert shown == ["unknown"]
+
+
+class TestHistoryWindow:
+    @pytest.fixture
+    def gui_with_history(self, controller, weather):
+        from bedliftcontrol.history import LocationVisit
+
+        tracker = MagicMock()
+        tracker.nights = 7
+        tracker.locations = [
+            LocationVisit("2026-09-12T18:30:00", "Thun", 46.7210, 7.5644),
+            LocationVisit("2026-09-14T17:04:12", "Zurich", 47.3667, 8.5500),
+        ]
+        return BedGui(controller, weather, history=tracker), tracker
+
+    def test_the_settings_window_offers_it(self, gui):
+        import customtkinter
+
+        customtkinter.CTkButton.reset_mock()
+        gui._settings_window()
+        texts = [c.kwargs.get("text") for c in customtkinter.CTkButton.call_args_list]
+        assert "Historie" in texts
+
+    def test_opens_and_closes(self, gui):
+        gui._history_window()
+        assert "history" in gui._open_windows
+        gui._history_window()
+        assert "history" not in gui._open_windows
+
+    def test_shows_the_night_count(self, gui_with_history):
+        import customtkinter
+
+        built, _ = gui_with_history
+        customtkinter.CTkLabel.reset_mock()
+        built._history_window()
+        texts = [c.kwargs.get("text") for c in customtkinter.CTkLabel.call_args_list]
+        assert "\u00dcbernachtungen: 7" in texts
+
+    def test_lists_the_newest_location_first(self, gui_with_history):
+        import customtkinter
+
+        built, _ = gui_with_history
+        customtkinter.CTkLabel.reset_mock()
+        built._history_window()
+        texts = [c.kwargs.get("text") or "" for c in customtkinter.CTkLabel.call_args_list]
+        entries = [text for text in texts if "(" in text and ")" in text]
+        assert entries[0].startswith("14.09.2026 17:04")
+        assert "Zurich" in entries[0]
+        assert "Thun" in entries[1]
+
+    def test_says_so_when_there_is_nothing_yet(self, gui):
+        import customtkinter
+
+        tracker = MagicMock()
+        tracker.nights = 0
+        tracker.locations = []
+        gui.history = tracker
+        customtkinter.CTkLabel.reset_mock()
+        gui._history_window()
+        texts = [c.kwargs.get("text") for c in customtkinter.CTkLabel.call_args_list]
+        assert "Noch keine Standorte aufgezeichnet" in texts
+
+    def test_works_without_a_tracker(self, gui):
+        gui.history = None
+        gui._history_window()  # must not raise
+        assert "history" in gui._open_windows
+
+    def test_the_timestamp_is_formatted(self, gui):
+        from bedliftcontrol.history import LocationVisit
+
+        visit = LocationVisit("2026-09-14T17:04:12", "Thun", 46.7210, 7.5644)
+        assert gui._format_visit(visit).startswith("14.09.2026 17:04   Thun   (46.7210, 7.5644)")
+
+    def test_an_unparsable_timestamp_is_shown_raw(self, gui):
+        from bedliftcontrol.history import LocationVisit
+
+        visit = LocationVisit("kaputt", "Thun", 46.7210, 7.5644)
+        assert gui._format_visit(visit).startswith("kaputt")
+
+    def test_the_window_fits_the_pi_panel(self, gui):
+        from bedliftcontrol.gui import ICON_TABLE_PAD
+
+        visible = gui._history_visible_height(480, 500)
+        assert visible + 2 * ICON_TABLE_PAD + 110 + 30 <= 480

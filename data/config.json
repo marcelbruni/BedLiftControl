@@ -4,5 +4,5 @@
   "bed_up": true,
   "kiosk": false,
   "position_steps": 28000,
-  "weather_location": "cransmontana"
+  "weather_location": "phone"
 }

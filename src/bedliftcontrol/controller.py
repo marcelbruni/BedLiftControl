@@ -39,8 +39,9 @@ CORRECTION_HOLD_MAX_STEPS = 8000
 
 
 class BedController:
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, history=None):
         self.config = config
+        self.history = history
         self._move_thread: Optional[threading.Thread] = None
         self._steps_total = 0
         self._steps_done = 0
@@ -265,6 +266,8 @@ class BedController:
         self.config.bed_up = self.at_top
         self.config.save()
         logger.info("Bed at %s of %s steps", self.config.position_steps, self.config.total_steps)
+        if self.history is not None:
+            self.history.record_bed_position(self.at_top, self.at_bottom)
 
     def correct_back_up(self) -> None:
         self.move_steps_single(Pins.BACK_PUL.value, Direction.UP.value, CORRECTION_STEPS)

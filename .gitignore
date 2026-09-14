@@ -26,3 +26,6 @@ Thumbs.db
 
 # Runtime weather cache
 data/weather.json
+
+# Night counter and location history, written at runtime
+data/history.json

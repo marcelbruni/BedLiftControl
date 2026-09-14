@@ -488,3 +488,37 @@ class TestCorrectionHold:
         self._stop_after(controller, 30)
         controller.hold_front_up()
         assert controller.config.position_steps == 7
+
+
+class TestHistoryHook:
+    """The controller reports every finished move so the night counter can act on it."""
+
+    @pytest.fixture
+    def tracked(self, gpio, tmp_path):
+        from bedliftcontrol.history import History
+
+        config = Config(total_steps=50, speed_pps=800.0, bed_up=False, position_steps=0,
+                        path=str(tmp_path / "config.json"))
+        tracker = History(path=str(tmp_path / "history.json"))
+        return BedController(config, tracker), tracker
+
+    def test_a_full_night_is_counted(self, tracked):
+        controller, tracker = tracked
+        controller.move_up()
+        assert tracker.nights == 0, "raising from the start is not a night"
+        controller.move_down()
+        controller.move_up()
+        assert tracker.nights == 1
+
+    def test_a_stop_halfway_counts_nothing(self, tracked, monkeypatch):
+        controller, tracker = tracked
+        controller.move_up()
+        controller.move_down()
+        monkeypatch.setattr(controller, "move_steps", lambda *_: None)
+        controller.move_up()
+        assert tracker.nights == 0, "the bed never reached the top"
+
+    def test_without_a_tracker_nothing_breaks(self, gpio, tmp_path):
+        config = Config(total_steps=50, speed_pps=800.0, bed_up=False, position_steps=0,
+                        path=str(tmp_path / "config.json"))
+        BedController(config).move_up()  # must not raise
