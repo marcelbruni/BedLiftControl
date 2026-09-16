@@ -34,9 +34,11 @@ BedLiftControl/
 │       ├── clock.py         # Date and time formatting (German, locale independent)
 │       ├── config.py        # Config dataclass, load/save JSON
 │       ├── controller.py    # BedController: motion + GPIO logic (no GUI)
+│       ├── game.py          # Memory game rules (no Tk)
 │       ├── gui.py           # BedGui: CustomTkinter user interface
 │       ├── history.py       # Night counter and location history
 │       ├── icons.py         # Canvas-drawn weather icons
+│       ├── jump.py          # Jump game physics (no Tk)
 │       ├── main.py          # Entry point
 │       ├── timesync.py      # Keeps the shown clock right when the Pi's is not
 │       └── weather.py       # Location, forecast and the WMO code table
@@ -186,10 +188,37 @@ monochrome with gaps that differ between Windows and the Pi.
   a bed that was never lowered counts nothing.
 - **Standort-Historie** — the phone position with a timestamp, appended whenever it
   differs from the one before it. Capped at the newest 1000 entries.
+- **Memory-Rekord** — the fewest moves a game was ever won in, see below.
+- **Hüpf-Rekord** — the highest score ever jumped, see below.
 
 The file is separate from `config.json` on purpose: that one is tracked by git and the
 update procedure resets it, which would wipe the counter. `history.json` is gitignored
 and survives updates.
+
+## Memory
+
+⚙ → "Memory spielen" deals eight pairs of weather icons face down in a 4×4 grid. Tap
+two cards: a pair stays up, anything else turns back over after a moment. The status
+line counts moves and pairs, and the fewest moves a game was ever won in is kept in
+`data/history.json`.
+
+Tapping is the only input the panel offers, which is why it is memory and not something
+needing swipes or a keyboard. The card faces reuse the drawn weather icons, so the game
+brings no artwork of its own.
+
+## Hüpfen
+
+⚙ → "Hüpfen spielen" is an endless runner: tap the play area to jump over the blocks
+coming at you. It starts at a leisurely 150 units per second and picks up 6 more every
+second up to 480, so the warning you get shrinks from two and a half seconds to well
+under one. Points count distance, the highest score lands in `data/history.json`, and
+after a crash the game waits 0.8s before a tap restarts it — long enough to read the
+score.
+
+The gaps between the blocks are measured in seconds of travel rather than pixels. A jump
+lasts 0.67s at any speed, so a gap of at least 1.1s always leaves ground to land on: the
+game gets faster, never unfair. A frame longer than 50ms is counted as 50ms, so a stutter
+on the Pi slows the game down instead of teleporting the player into a block.
 
 ## Clock
 

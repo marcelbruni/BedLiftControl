@@ -233,3 +233,41 @@ class TestLocationVisit:
     def test_position_is_rounded_for_comparison(self):
         visit = LocationVisit("2026-09-14T17:04:12", "Thun", 46.7200001, 7.5599999)
         assert visit.position == (46.72, 7.56)
+
+
+class TestJumpRecord:
+    def test_nothing_played_is_zero(self, tmp_path):
+        assert History(path=str(tmp_path / "history.json")).best_jump_score == 0
+
+    def test_the_first_score_is_a_record(self, tmp_path):
+        tracker = History(path=str(tmp_path / "history.json"))
+        assert tracker.record_jump_result(12) is True
+        assert tracker.best_jump_score == 12
+
+    def test_a_higher_score_replaces_it(self, tmp_path):
+        tracker = History(path=str(tmp_path / "history.json"))
+        tracker.record_jump_result(12)
+        assert tracker.record_jump_result(30) is True
+        assert tracker.best_jump_score == 30
+
+    def test_a_lower_score_is_kept_out(self, tmp_path):
+        tracker = History(path=str(tmp_path / "history.json"))
+        tracker.record_jump_result(30)
+        assert tracker.record_jump_result(12) is False
+        assert tracker.best_jump_score == 30
+
+    def test_the_same_score_again_is_no_record(self, tmp_path):
+        tracker = History(path=str(tmp_path / "history.json"))
+        tracker.record_jump_result(30)
+        assert tracker.record_jump_result(30) is False
+
+    def test_it_survives_a_restart(self, tmp_path):
+        path = str(tmp_path / "history.json")
+        History(path=path).record_jump_result(30)
+        assert History(path=path).best_jump_score == 30
+
+    def test_an_older_file_without_it_still_loads(self, tmp_path):
+        path = tmp_path / "history.json"
+        path.write_text(json.dumps({"nights": 3}), encoding="utf-8")
+        tracker = History(path=str(path))
+        assert tracker.best_jump_score == 0 and tracker.nights == 3

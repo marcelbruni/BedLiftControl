@@ -2,13 +2,16 @@
 
 import logging
 import sys
+import time
+import tkinter
 from datetime import datetime
 from enum import Enum
 from tkinter import messagebox
 
 import customtkinter as ctk
 
-from bedliftcontrol import clock, icons
+from bedliftcontrol import clock, icons, jump
+from bedliftcontrol.game import IGNORED, MISMATCH, MemoryGame
 from bedliftcontrol.controller import BedController
 from bedliftcontrol.timesync import TimeSync
 from bedliftcontrol.weather import LOCATIONS, WEATHER_CODES, WeatherService, location_or_default
@@ -39,6 +42,20 @@ LOCATION_BUTTON_WIDTH = 260
 LOCATION_BUTTON_HEIGHT = 44
 HISTORY_ROW_PITCH = 26
 HISTORY_WIDTH = 420
+GAME_CARD_SIZE = 64
+GAME_COLUMNS = 4
+GAME_CARD_PAD = 4
+GAME_MISMATCH_DELAY_MS = 900
+GAME_CARD_BACK_COLOR = "#2f4f6a"
+GAME_CARD_MATCHED_COLOR = "#1f3a2a"
+JUMP_TICK_MS = 33
+JUMP_CANVAS_HEIGHT = 150
+JUMP_GROUND_Y = 130  # leaves 130 units of air for a jump that peaks at 105
+JUMP_SKY_COLOR = "#1b2a38"
+JUMP_GROUND_COLOR = "#5a6b78"
+JUMP_PLAYER_COLOR = "#43a047"
+JUMP_OBSTACLE_COLOR = "#c62828"
+JUMP_TEXT_COLOR = "#dce4ee"
 
 POLL_INTERVAL_MS = 100
 WEATHER_UI_REFRESH_MS = 5000
@@ -97,6 +114,13 @@ class BedGui:
         self._kiosk_button = None
         self._correction_timer = None
         self._correction_holding = False
+        self._game = None
+        self._game_cards = []
+        self._jump = None
+        self._jump_canvas = None
+        self._jump_timer = None
+        self._jump_tick_at = None
+        self._jump_record = False
         self._open_windows: dict[str, object] = {}
         self._steps_value_label = None
         self._speed_value_label = None
@@ -362,8 +386,13 @@ class BedGui:
             # the buttons are about to be destroyed, so no release event is coming
             self._cancel_correction_timer()
             self._end_correction_hold()
-        self._correction_timer = None
-        self._correction_holding = False
+        if name == "game":
+            self._game = None
+            self._game_cards = []
+        if name == "jump":
+            self._stop_jump_loop()
+            self._jump = None
+            self._jump_canvas = None
         if window is not None:
             window.destroy()
 
@@ -373,7 +402,7 @@ class BedGui:
     def _build_settings_window(self):
         window = ctk.CTkToplevel(self.app)
         window.title("Settings")
-        window.geometry("560x280")
+        window.geometry("560x340")
         content = ctk.CTkFrame(window, fg_color="transparent")
         content.pack(expand=True)
         ctk.CTkLabel(content, text="total steps").grid(row=0, column=0, padx=12, pady=12, sticky="e")
@@ -393,7 +422,13 @@ class BedGui:
         self._kiosk_button.grid(row=2, column=0, columnspan=3, padx=12, pady=(16, 6))
         ctk.CTkButton(content, text="Historie", width=300,
                       command=self._history_window).grid(row=3, column=0, columnspan=3,
-                                                         padx=12, pady=(6, 12))
+                                                         padx=12, pady=(6, 6))
+        ctk.CTkButton(content, text="Memory spielen", width=300,
+                      command=self._game_window).grid(row=4, column=0, columnspan=3,
+                                                      padx=12, pady=(6, 6))
+        ctk.CTkButton(content, text="Hüpfen spielen", width=300,
+                      command=self._jump_window).grid(row=5, column=0, columnspan=3,
+                                                      padx=12, pady=(6, 12))
         return window
 
     def _on_steps_change(self, value) -> None:
@@ -470,6 +505,196 @@ class BedGui:
         self.controller.config.save()
         self._on_window_closed("location")
         self._apply_weather()
+
+    # --- memory game -------------------------------------------------------
+
+    def _game_window(self) -> None:
+        self._toggle_window("game", self._build_game_window)
+
+    def _build_game_window(self):
+        window = ctk.CTkToplevel(self.app)
+        window.title("Memory")
+        content = ctk.CTkFrame(window, fg_color="transparent")
+        content.pack(padx=ICON_TABLE_PAD, pady=ICON_TABLE_PAD)
+
+        self._game = MemoryGame()
+        self.game_status = ctk.CTkLabel(content, text="", font=ctk.CTkFont(size=16, weight="bold"))
+        self.game_status.grid(row=0, column=0, columnspan=GAME_COLUMNS, pady=(0, 8))
+
+        self._game_cards = []
+        for index in range(len(self._game.cards)):
+            canvas = icons.IconCanvas(content, size=GAME_CARD_SIZE, background=_panel_background())
+            canvas.grid(row=1 + index // GAME_COLUMNS, column=index % GAME_COLUMNS,
+                        padx=GAME_CARD_PAD, pady=GAME_CARD_PAD)
+            canvas.bind("<Button-1>", lambda _event, position=index: self._on_card(position))
+            self._game_cards.append(canvas)
+
+        rows = 1 + (len(self._game.cards) - 1) // GAME_COLUMNS
+        ctk.CTkButton(content, text="Neues Spiel", width=200, command=self._new_game).grid(
+            row=2 + rows, column=0, columnspan=GAME_COLUMNS, pady=(10, 0)
+        )
+        self._render_game()
+        return window
+
+    def _new_game(self) -> None:
+        if self._game is None:
+            return
+        self._game.deal()
+        self._render_game()
+
+    def _on_card(self, index: int) -> None:
+        if self._game is None:
+            return
+        outcome = self._game.reveal(index)
+        if outcome == IGNORED:
+            return
+        self._render_game()
+        if outcome == MISMATCH:
+            self.app.after(GAME_MISMATCH_DELAY_MS, self._resolve_cards)
+        elif self._game.won:
+            self._finish_game()
+
+    def _resolve_cards(self) -> None:
+        # the window may well be gone by the time this fires
+        if self._game is None or not self._game_cards:
+            return
+        self._game.resolve()
+        self._render_game()
+
+    def _finish_game(self) -> None:
+        best = False
+        if self.history is not None:
+            best = self.history.record_memory_result(self._game.moves)
+        suffix = "  Neuer Rekord!" if best else ""
+        self.game_status.configure(text=f"Geschafft in {self._game.moves} Zügen!{suffix}")
+
+    def _render_game(self) -> None:
+        if self._game is None or not self._game_cards:
+            return
+        for canvas, card in zip(self._game_cards, self._game.cards):
+            self._draw_card(canvas, card)
+        self.game_status.configure(text=self._game_status_text())
+
+    def _game_status_text(self) -> str:
+        best = self.history.best_memory_moves if self.history is not None else None
+        line = f"Züge: {self._game.moves}   Paare: {self._game.pairs_found}/{len(self._game.icons)}"
+        return line if best is None else f"{line}   Rekord: {best}"
+
+    @staticmethod
+    def _draw_card(canvas, card) -> None:
+        canvas.delete("all")
+        if card.face_up or card.matched:
+            if card.matched:
+                canvas.create_rectangle(0, 0, GAME_CARD_SIZE, GAME_CARD_SIZE,
+                                        fill=GAME_CARD_MATCHED_COLOR, outline="")
+            icons.draw_icon(canvas, card.icon, GAME_CARD_SIZE)
+            return
+        canvas.create_rectangle(2, 2, GAME_CARD_SIZE - 2, GAME_CARD_SIZE - 2,
+                                fill=GAME_CARD_BACK_COLOR, outline="")
+        canvas.create_text(GAME_CARD_SIZE / 2, GAME_CARD_SIZE / 2, text="?",
+                           fill="#dce4ee", font=("Roboto", round(GAME_CARD_SIZE * 0.4)))
+
+    # --- jump game ---------------------------------------------------------
+
+    def _jump_window(self) -> None:
+        self._toggle_window("jump", self._build_jump_window)
+
+    def _build_jump_window(self):
+        window = ctk.CTkToplevel(self.app)
+        window.title("Hüpfen")
+        content = ctk.CTkFrame(window, fg_color="transparent")
+        content.pack(padx=ICON_TABLE_PAD, pady=ICON_TABLE_PAD)
+
+        self._jump = jump.JumpGame()
+        self.jump_status = ctk.CTkLabel(content, text="", font=ctk.CTkFont(size=16, weight="bold"))
+        self.jump_status.pack(pady=(0, 8))
+
+        self._jump_canvas = tkinter.Canvas(content, width=int(jump.WORLD_WIDTH),
+                                           height=JUMP_CANVAS_HEIGHT, bg=JUMP_SKY_COLOR,
+                                           highlightthickness=0, borderwidth=0)
+        self._jump_canvas.pack()
+        self._jump_canvas.bind("<Button-1>", lambda _event: self._jump_tap())
+
+        ctk.CTkButton(content, text="Neues Spiel", width=200,
+                      command=self._new_jump_game).pack(pady=(10, 0))
+        self._render_jump()
+        self._start_jump_loop()
+        return window
+
+    def _new_jump_game(self) -> None:
+        if self._jump is None:
+            return
+        self._jump.reset()
+        self._jump_record = False
+        self._render_jump()
+
+    def _jump_tap(self) -> None:
+        if self._jump is None:
+            return
+        if self._jump.can_restart:
+            self._jump_record = False
+        self._jump.jump()
+        self._render_jump()
+
+    def _start_jump_loop(self) -> None:
+        self._jump_tick_at = time.monotonic()
+        self._jump_timer = self.app.after(JUMP_TICK_MS, self._jump_loop)
+
+    def _stop_jump_loop(self) -> None:
+        if self._jump_timer is not None:
+            self.app.after_cancel(self._jump_timer)
+            self._jump_timer = None
+
+    def _jump_loop(self) -> None:
+        if self._jump is None or self._jump_canvas is None:
+            return
+        now = time.monotonic()
+        was_running = self._jump.state == jump.RUNNING
+        self._jump.tick(now - self._jump_tick_at)
+        self._jump_tick_at = now
+        if was_running and self._jump.state == jump.OVER:
+            self._finish_jump()
+        self._render_jump()
+        self._jump_timer = self.app.after(JUMP_TICK_MS, self._jump_loop)
+
+    def _render_jump(self) -> None:
+        if self._jump is None or self._jump_canvas is None:
+            return
+        canvas = self._jump_canvas
+        canvas.delete("all")
+        canvas.create_line(0, JUMP_GROUND_Y, jump.WORLD_WIDTH, JUMP_GROUND_Y,
+                           fill=JUMP_GROUND_COLOR, width=2)
+        for obstacle in self._jump.obstacles:
+            canvas.create_rectangle(obstacle.x, JUMP_GROUND_Y - obstacle.height,
+                                    obstacle.right, JUMP_GROUND_Y,
+                                    fill=JUMP_OBSTACLE_COLOR, outline="")
+        foot = JUMP_GROUND_Y - self._jump.height
+        canvas.create_rectangle(jump.PLAYER_X, foot - jump.PLAYER_SIZE,
+                                jump.PLAYER_X + jump.PLAYER_SIZE, foot,
+                                fill=JUMP_PLAYER_COLOR, outline="")
+        hint = self._jump_hint()
+        if hint:
+            canvas.create_text(jump.WORLD_WIDTH / 2, JUMP_GROUND_Y / 2, text=hint,
+                               fill=JUMP_TEXT_COLOR, font=("Roboto", 20, "bold"))
+        self.jump_status.configure(text=self._jump_status_text())
+
+    def _finish_jump(self) -> None:
+        if self.history is not None:
+            self._jump_record = self.history.record_jump_result(self._jump.score)
+
+    def _jump_hint(self) -> str:
+        if self._jump.state == jump.READY:
+            return "Tippen zum Starten"
+        if self._jump.state == jump.OVER:
+            return "Vorbei - nochmal tippen" if self._jump.can_restart else "Vorbei!"
+        return ""
+
+    def _jump_status_text(self) -> str:
+        best = self.history.best_jump_score if self.history is not None else 0
+        line = f"Punkte: {self._jump.score}   Tempo: {round(self._jump.speed)}"
+        if best:
+            line = f"{line}   Rekord: {best}"
+        return f"{line}   Neuer Rekord!" if self._jump_record else line
 
     def _history_window(self) -> None:
         self._toggle_window("history", self._build_history_window)

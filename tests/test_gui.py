@@ -9,7 +9,13 @@ from unittest.mock import MagicMock
 import pytest
 
 from bedliftcontrol import gui as gui_module
-from bedliftcontrol.gui import MIN_BAR_FRACTION, STUB_TRIM_PX, BedGui, MoveContext
+from bedliftcontrol.gui import (
+    GAME_MISMATCH_DELAY_MS,
+    MIN_BAR_FRACTION,
+    STUB_TRIM_PX,
+    BedGui,
+    MoveContext,
+)
 
 WIDGETS = [
     "CTk",
@@ -1051,3 +1057,292 @@ class TestHistoryWindow:
 
         visible = gui._history_visible_height(480, 500)
         assert visible + 2 * ICON_TABLE_PAD + 110 + 30 <= 480
+
+
+class TestGameWindow:
+    """Tapping is the only input the panel has, so every rule must work by tap alone."""
+
+    @pytest.fixture
+    def playing(self, controller, weather):
+        from bedliftcontrol.game import MemoryGame
+
+        tracker = MagicMock()
+        tracker.best_memory_moves = None
+        built = BedGui(controller, weather, history=tracker)
+        built._game_window()
+        built._game = MemoryGame(shuffle=lambda cards: None)
+        built._render_game()
+        return built, tracker
+
+    def test_the_settings_window_offers_it(self, gui):
+        import customtkinter
+
+        customtkinter.CTkButton.reset_mock()
+        gui._settings_window()
+        texts = [c.kwargs.get("text") for c in customtkinter.CTkButton.call_args_list]
+        assert "Memory spielen" in texts
+
+    def test_opens_and_closes(self, gui):
+        gui._game_window()
+        assert "game" in gui._open_windows
+        gui._game_window()
+        assert "game" not in gui._open_windows
+
+    def test_one_canvas_per_card(self, playing):
+        built, _ = playing
+        assert len(built._game_cards) == len(built._game.cards)
+
+    def test_every_card_is_wired_to_its_own_index(self, controller, weather, monkeypatch):
+        """The classic loop trap: every lambda closing over the last index instead of
+        its own, so all sixteen cards would turn the same one over."""
+        monkeypatch.setattr(gui_module.icons, "IconCanvas",
+                            lambda master, size, background: MagicMock())
+        built = BedGui(controller, weather)
+        built._game_window()
+        for index, canvas in enumerate(built._game_cards):
+            handlers = {c.args[0]: c.args[1] for c in canvas.bind.call_args_list}
+            assert "<Button-1>" in handlers
+            built._game.deal()
+            handlers["<Button-1>"](None)
+            assert built._game.cards[index].face_up is True
+
+    def test_tapping_turns_a_card_over(self, playing):
+        built, _ = playing
+        built._on_card(0)
+        assert built._game.cards[0].face_up is True
+
+    def test_a_mismatch_schedules_the_turn_back(self, playing):
+        built, _ = playing
+        built.app.after.reset_mock()
+        built._on_card(0)
+        built._on_card(2)
+        delays = [c.args[0] for c in built.app.after.call_args_list]
+        assert GAME_MISMATCH_DELAY_MS in delays
+
+    def test_the_scheduled_turn_back_flips_them(self, playing):
+        built, _ = playing
+        built._on_card(0)
+        built._on_card(2)
+        built._resolve_cards()
+        assert not any(card.face_up for card in built._game.cards)
+
+    def test_a_match_schedules_nothing(self, playing):
+        built, _ = playing
+        built.app.after.reset_mock()
+        built._on_card(0)
+        built._on_card(1)
+        delays = [c.args[0] for c in built.app.after.call_args_list]
+        assert GAME_MISMATCH_DELAY_MS not in delays
+
+    def test_closing_the_window_stops_a_pending_turn_back(self, playing):
+        """The scheduled callback fires after the widgets are gone."""
+        built, _ = playing
+        built._on_card(0)
+        built._on_card(2)
+        built._on_window_closed("game")
+        built._resolve_cards()  # must not raise
+        assert built._game is None
+
+    def test_tapping_after_the_window_closed_does_nothing(self, playing):
+        built, _ = playing
+        built._on_window_closed("game")
+        built._on_card(0)  # must not raise
+
+    def test_winning_reports_the_move_count(self, playing):
+        built, tracker = playing
+        tracker.record_memory_result.return_value = False
+        for pair in range(len(built._game.icons)):
+            built._on_card(2 * pair)
+            built._on_card(2 * pair + 1)
+        assert built._game.won is True
+        built.game_status.configure.assert_any_call(
+            text=f"Geschafft in {built._game.moves} Z\u00fcgen!"
+        )
+
+    def test_winning_offers_the_result_to_the_history(self, playing):
+        built, tracker = playing
+        tracker.record_memory_result.return_value = False
+        for pair in range(len(built._game.icons)):
+            built._on_card(2 * pair)
+            built._on_card(2 * pair + 1)
+        tracker.record_memory_result.assert_called_once_with(built._game.moves)
+
+    def test_a_new_best_is_announced(self, playing):
+        built, tracker = playing
+        tracker.record_memory_result.return_value = True
+        for pair in range(len(built._game.icons)):
+            built._on_card(2 * pair)
+            built._on_card(2 * pair + 1)
+        texts = [c.kwargs.get("text") for c in built.game_status.configure.call_args_list]
+        assert any("Neuer Rekord!" in (text or "") for text in texts)
+
+    def test_works_without_a_history(self, gui):
+        gui.history = None
+        gui._game_window()
+        for pair in range(len(gui._game.icons)):
+            gui._on_card(2 * pair)
+            gui._on_card(2 * pair + 1)  # must not raise
+
+    def test_a_new_game_clears_the_board(self, playing):
+        built, _ = playing
+        built._on_card(0)
+        built._on_card(1)
+        built._new_game()
+        assert not any(card.face_up or card.matched for card in built._game.cards)
+
+    def test_the_status_line_shows_progress(self, playing):
+        built, _ = playing
+        built._on_card(0)
+        built._on_card(1)
+        texts = [c.kwargs.get("text") or "" for c in built.game_status.configure.call_args_list]
+        assert any(text.startswith("Z\u00fcge: 1") and "Paare: 1/" in text for text in texts)
+
+    def test_the_record_is_shown_when_there_is_one(self, controller, weather):
+        tracker = MagicMock()
+        tracker.best_memory_moves = 11
+        built = BedGui(controller, weather, history=tracker)
+        built._game_window()
+        texts = [c.kwargs.get("text") or "" for c in built.game_status.configure.call_args_list]
+        assert any("Rekord: 11" in text for text in texts)
+
+
+class TestJumpWindow:
+    """One tap is the whole game, and it runs on a timer, so both must survive a
+    window that gets closed mid-run."""
+
+    @pytest.fixture
+    def canvas(self, monkeypatch):
+        """A mock instead of the real Tk canvas, so the tap binding can be inspected."""
+        made = []
+
+        def build(*_args, **_kwargs):
+            made.append(MagicMock())
+            return made[-1]
+
+        monkeypatch.setattr(gui_module.tkinter, "Canvas", build)
+        return made
+
+    @pytest.fixture
+    def running(self, controller, weather, canvas):
+        tracker = MagicMock()
+        tracker.best_jump_score = 0
+        built = BedGui(controller, weather, history=tracker)
+        built._jump_window()
+        return built, tracker
+
+    @staticmethod
+    def tap(built, canvas):
+        handlers = {c.args[0]: c.args[1] for c in canvas[0].bind.call_args_list}
+        handlers["<Button-1>"](None)
+
+    def test_the_settings_window_offers_it(self, gui):
+        import customtkinter
+
+        customtkinter.CTkButton.reset_mock()
+        gui._settings_window()
+        texts = [c.kwargs.get("text") for c in customtkinter.CTkButton.call_args_list]
+        assert "Hüpfen spielen" in texts
+
+    def test_opens_and_closes(self, gui):
+        gui._jump_window()
+        assert "jump" in gui._open_windows
+        gui._jump_window()
+        assert "jump" not in gui._open_windows
+
+    def test_it_waits_for_the_first_tap(self, running):
+        built, _ = running
+        assert built._jump.state == gui_module.jump.READY
+
+    def test_the_hint_invites_the_first_tap(self, running):
+        built, _ = running
+        assert built._jump_hint() == "Tippen zum Starten"
+
+    def test_tapping_the_canvas_starts_the_run(self, running, canvas):
+        built, _ = running
+        self.tap(built, canvas)
+        assert built._jump.state == gui_module.jump.RUNNING
+
+    def test_the_loop_keeps_itself_going(self, running):
+        built, _ = running
+        built.app.after.reset_mock()
+        built._jump_loop()
+        delays = [c.args[0] for c in built.app.after.call_args_list]
+        assert gui_module.JUMP_TICK_MS in delays
+
+    def test_closing_the_window_cancels_the_tick(self, running):
+        built, _ = running
+        timer = built._jump_timer
+        built._on_window_closed("jump")
+        built.app.after_cancel.assert_called_with(timer)
+        assert built._jump is None
+
+    def test_the_loop_stops_once_the_window_is_gone(self, running):
+        """The pending tick fires after the canvas was destroyed."""
+        built, _ = running
+        built._on_window_closed("jump")
+        built.app.after.reset_mock()
+        built._jump_loop()  # must not raise
+        assert built.app.after.call_count == 0
+
+    def test_tapping_after_the_window_closed_does_nothing(self, running):
+        built, _ = running
+        built._on_window_closed("jump")
+        built._jump_tap()  # must not raise
+
+    def test_a_crash_is_reported_to_the_history(self, running):
+        built, tracker = running
+        tracker.record_jump_result.return_value = False
+        self.crash(built)
+        assert built._jump.state == gui_module.jump.OVER
+        tracker.record_jump_result.assert_called_once_with(built._jump.score)
+
+    def test_a_crash_is_reported_only_once(self, running):
+        built, tracker = running
+        tracker.record_jump_result.return_value = False
+        self.crash(built)
+        built._jump_loop()
+        assert tracker.record_jump_result.call_count == 1
+
+    def test_a_new_record_is_announced(self, running):
+        built, tracker = running
+        tracker.record_jump_result.return_value = True
+        self.crash(built)
+        assert "Neuer Rekord!" in built._jump_status_text()
+
+    def test_the_announcement_goes_away_with_the_next_game(self, running):
+        built, tracker = running
+        tracker.record_jump_result.return_value = True
+        self.crash(built)
+        built._new_jump_game()
+        assert "Neuer Rekord!" not in built._jump_status_text()
+
+    def test_the_record_is_shown_when_there_is_one(self, controller, weather, canvas):
+        tracker = MagicMock()
+        tracker.best_jump_score = 42
+        built = BedGui(controller, weather, history=tracker)
+        built._jump_window()
+        assert "Rekord: 42" in built._jump_status_text()
+
+    def test_no_record_is_shown_before_the_first_game(self, running):
+        built, _ = running
+        assert "Rekord" not in built._jump_status_text()
+
+    def test_works_without_a_history(self, gui, canvas):
+        gui._jump_window()
+        self.crash(gui)  # must not raise
+        assert "Rekord" not in gui._jump_status_text()
+
+    def test_a_new_game_clears_the_track(self, running):
+        built, _ = running
+        self.crash(built)
+        built._new_jump_game()
+        assert built._jump.state == gui_module.jump.READY
+        assert built._jump.obstacles == []
+
+    @staticmethod
+    def crash(built):
+        """Put an obstacle where the player stands and let one tick find it."""
+        built._jump.state = gui_module.jump.RUNNING
+        built._jump.obstacles = [gui_module.jump.Obstacle(
+            x=gui_module.jump.PLAYER_X, width=20.0, height=30.0)]
+        built._jump_loop()
