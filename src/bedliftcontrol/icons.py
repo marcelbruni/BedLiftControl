@@ -150,6 +150,13 @@ def _drops(canvas, size, count, shift=0.0):
               _PRECIP_Y + 0.19, RAIN_COLOR, 0.055)
 
 
+def draw_drop(canvas, size) -> None:
+    """A single teardrop, filling the canvas: the marker for the rain probability."""
+    canvas.create_polygon(0.50 * size, 0.04 * size, 0.83 * size, 0.74 * size,
+                          0.17 * size, 0.74 * size, fill=RAIN_COLOR, outline="")
+    _oval(canvas, size, 0.50, 0.67, 0.31, RAIN_COLOR)
+
+
 def _dots(canvas, size, count, shift=0.0):
     for x in _spread(count):
         _oval(canvas, size, x + shift, _PRECIP_Y + 0.09, 0.043, RAIN_COLOR)

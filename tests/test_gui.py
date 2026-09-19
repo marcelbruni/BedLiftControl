@@ -275,6 +275,32 @@ class TestWeatherDisplay:
         gui._refresh_weather()
         assert len(gui._forecast_labels) == 10  # 2 days x 5 rows (incl. rain)
 
+    def test_the_rain_probability_is_drawn_not_an_emoji(self, gui, monkeypatch):
+        """Noto Color Emoji on the Pi has no drop glyph and renders a tofu box."""
+        from bedliftcontrol.weather import DailyForecast
+
+        drawn = []
+        monkeypatch.setattr(gui_module.tkinter, "Canvas", lambda *a, **k: MagicMock())
+        monkeypatch.setattr(gui_module.icons, "draw_drop",
+                            lambda canvas, size: drawn.append(size))
+        import customtkinter
+
+        customtkinter.CTkLabel.reset_mock()
+        gui._render_forecast([DailyForecast("Do", "2026-09-03", "sun", 22.0, 12.0, rain=80)])
+        texts = [c.kwargs.get("text", "") for c in customtkinter.CTkLabel.call_args_list]
+        assert drawn == [gui_module.RAIN_DROP_SIZE]
+        assert "80%" in texts
+        assert not any("💧" in (text or "") for text in texts)
+
+    def test_a_day_without_a_rain_value_gets_no_drop(self, gui, monkeypatch):
+        from bedliftcontrol.weather import DailyForecast
+
+        drawn = []
+        monkeypatch.setattr(gui_module.icons, "draw_drop",
+                            lambda canvas, size: drawn.append(size))
+        gui._render_forecast([DailyForecast("Do", "2026-09-03", "sun", 22.0, 12.0, rain=None)])
+        assert drawn == []
+
 
 class TestPanelSeparation:
     """The current-conditions block and the forecast block must stay independent, so

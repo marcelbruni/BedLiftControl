@@ -68,6 +68,8 @@ FORECAST_COL_WIDTH = 50
 _EMOJI_FONT = "Segoe UI Emoji" if sys.platform.startswith("win") else "Noto Color Emoji"
 WEATHER_ICON_SIZE = 64      # big icon next to the current temperature
 FORECAST_ICON_SIZE = 34     # one per day, must stay inside FORECAST_COL_WIDTH
+RAIN_DROP_SIZE = 11         # drawn, because Noto Color Emoji has no drop on the Pi
+RAIN_COLOR = "#5aa0e0"
 
 # reference window listing every weather code with its icon
 ICON_TABLE_ICON_SIZE = 26
@@ -915,8 +917,6 @@ class BedGui:
                 (f"{round(day.temp_max)}°", ctk.CTkFont(size=12), None),
                 (f"{round(day.temp_min)}°", ctk.CTkFont(size=12), "#888888"),
             ]
-            if day.rain is not None:
-                rows.append((f"💧 {day.rain}%", ctk.CTkFont(size=12), "#5aa0e0"))
             # the icon is drawn, not text, so it gets its own row between name and temps
             icon = icons.IconCanvas(self.forecast_frame, size=FORECAST_ICON_SIZE, background=_panel_background())
             icon.show(day.icon)
@@ -926,6 +926,19 @@ class BedGui:
                 label = ctk.CTkLabel(self.forecast_frame, text=text, anchor="center", font=font, text_color=color)
                 label.grid(row=row if row == 0 else row + 1, column=index, padx=8, pady=1, sticky="ew")
                 self._forecast_labels.append(label)
+            if day.rain is not None:
+                self._forecast_labels.append(self._build_rain_cell(index, len(rows) + 1, day.rain))
+
+    def _build_rain_cell(self, column: int, row: int, rain: int):
+        cell = ctk.CTkFrame(self.forecast_frame, fg_color="transparent")
+        cell.grid(row=row, column=column, padx=2, pady=1)
+        drop = tkinter.Canvas(cell, width=RAIN_DROP_SIZE, height=RAIN_DROP_SIZE,
+                              bg=_panel_background(), highlightthickness=0, borderwidth=0)
+        icons.draw_drop(drop, RAIN_DROP_SIZE)
+        drop.pack(side="left")
+        ctk.CTkLabel(cell, text=f"{rain}%", font=ctk.CTkFont(size=12),
+                     text_color=RAIN_COLOR).pack(side="left", padx=(2, 0))
+        return cell
 
     def display(self) -> None:
         self.app.mainloop()
