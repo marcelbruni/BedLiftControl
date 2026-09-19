@@ -27,7 +27,7 @@ Die App merkt sich die Bettposition **in Schritten**, nicht nur als oben/unten:
 | `position_steps` | Aktuelle Position: `0` = ganz unten, `total_steps` = ganz oben |
 | `bed_up` | Wird aus `position_steps` abgeleitet, nicht von Hand gepflegt |
 | `kiosk` | Vollbildmodus (siehe Schritt 13) |
-| `weather_location` | Ausgewählter Wetter-Ort. In der eingecheckten Datei steht `lacure`, der Standard im Code ist `phone` (Handystandort) |
+| `weather_location` | Ausgewählter Wetter-Ort, Standard `phone` (Handystandort) |
 
 > **`data/history.json` ist eine andere Datei** und steht bewusst nicht in git:
 > dort liegen der Übernachtungszähler, die Standort-Historie und die beiden
@@ -284,9 +284,9 @@ Wenn das Projekt bereits per git auf dem Pi liegt und am Entwicklungsrechner
 > woanders, fährt die App in die falsche Richtung gegen den Anschlag.
 >
 > Mit zurückgesetzt werden auch `kiosk`, `total_steps`, `speed_pps` und
-> `weather_location` — der Wetter-Ort springt dabei auf den eingecheckten Wert
-> `lacure`. Wenn du den Kiosk-Modus, eigene Schrittzahlen oder deinen Ort behalten
-> willst, nimm die Variante mit `cp` weiter unten.
+> `weather_location` — der Wetter-Ort springt dabei zurück auf `phone`
+> (Handystandort). Wenn du den Kiosk-Modus, eigene Schrittzahlen oder deinen Ort
+> behalten willst, nimm die Variante mit `cp` weiter unten.
 >
 > Der Übernachtungszähler, die Standort-Historie und die Spielrekorde sind **nicht**
 > betroffen, die liegen in `data/history.json` ausserhalb von git.
