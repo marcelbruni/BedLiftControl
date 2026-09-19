@@ -21,6 +21,8 @@ of the network latency. What remains is comfortably under a second, which the di
 (hours, minutes, seconds) cannot resolve anyway.
 """
 
+from __future__ import annotations
+
 import logging
 import subprocess
 import sys

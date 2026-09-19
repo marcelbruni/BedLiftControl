@@ -1,5 +1,7 @@
 """CustomTkinter user interface for the bed lift. Delegates all motion to BedController."""
 
+from __future__ import annotations
+
 import logging
 import sys
 import time
