@@ -27,11 +27,13 @@ Die App merkt sich die Bettposition **in Schritten**, nicht nur als oben/unten:
 | `position_steps` | Aktuelle Position: `0` = ganz unten, `total_steps` = ganz oben |
 | `bed_up` | Wird aus `position_steps` abgeleitet, nicht von Hand gepflegt |
 | `kiosk` | Vollbildmodus (siehe Schritt 13) |
-| `weather_location` | Ausgewählter Wetter-Ort, Standard `phone` (Handystandort) |
+| `weather_location` | Ausgewählter Wetter-Ort. In der eingecheckten Datei steht `lacure`, der Standard im Code ist `phone` (Handystandort) |
 
 > **`data/history.json` ist eine andere Datei** und steht bewusst nicht in git:
-> dort liegen der Übernachtungszähler und die Standort-Historie. Sie überlebt
-> Updates, weil `git checkout` sie nicht anfasst. Anzusehen unter ⚙ → „Historie".
+> dort liegen der Übernachtungszähler, die Standort-Historie und die beiden
+> Spielrekorde (Memory, Hüpfen). Sie überlebt Updates, weil `git checkout` sie
+> nicht anfasst. Zähler und Standorte stehen unter ⚙ → „Historie", die Rekorde
+> im jeweiligen Spiel.
 
 Ausserdem: **Internet am Pi** (z. B. Handy-Tethering). Nötig für das Klonen und
 das Installieren der Pakete — danach läuft die App offline.
@@ -281,12 +283,13 @@ Wenn das Projekt bereits per git auf dem Pi liegt und am Entwicklungsrechner
 > eingecheckten Wert `28000` zurück, also „Bett oben". Steht das Bett dann
 > woanders, fährt die App in die falsche Richtung gegen den Anschlag.
 >
-> Mit zurückgesetzt werden auch `kiosk`, `weather_location`, `total_steps` und
-> `speed_pps`. Wenn du den Kiosk-Modus oder eigene Schrittzahlen behalten willst,
-> nimm die Variante mit `cp` weiter unten.
+> Mit zurückgesetzt werden auch `kiosk`, `total_steps`, `speed_pps` und
+> `weather_location` — der Wetter-Ort springt dabei auf den eingecheckten Wert
+> `lacure`. Wenn du den Kiosk-Modus, eigene Schrittzahlen oder deinen Ort behalten
+> willst, nimm die Variante mit `cp` weiter unten.
 >
-> Der Übernachtungszähler und die Standort-Historie sind **nicht** betroffen, die
-> liegen in `data/history.json` ausserhalb von git.
+> Der Übernachtungszähler, die Standort-Historie und die Spielrekorde sind **nicht**
+> betroffen, die liegen in `data/history.json` ausserhalb von git.
 
 ```bash
 cd ~/BedLiftControl
