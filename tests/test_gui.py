@@ -57,6 +57,18 @@ def ctk_widgets(monkeypatch):
         getattr(customtkinter, name).side_effect = None
 
 
+@pytest.fixture(autouse=True)
+def ready_inverter(monkeypatch):
+    """Tests that are not about the inverter get one that is already running, so a
+    movement starts straight away instead of waiting out the start-up."""
+    inverter = MagicMock()
+    inverter.on = True
+    inverter.ready = True
+    inverter.seconds_until_ready = 0.0
+    monkeypatch.setattr(gui_module, "Inverter", lambda *args, **kwargs: inverter)
+    return inverter
+
+
 @pytest.fixture
 def controller():
     fake = MagicMock()
@@ -1372,3 +1384,179 @@ class TestJumpWindow:
         built._jump.obstacles = [gui_module.jump.Obstacle(
             x=gui_module.jump.PLAYER_X, width=20.0, height=30.0)]
         built._jump_loop()
+
+
+class FakeInverter:
+    """Stateful stand-in: the GUI has to see its own switching reflected."""
+
+    def __init__(self, on=False, ready=False):
+        self.on = on
+        self._ready = ready
+        self.turn_on_calls = 0
+
+    @property
+    def ready(self):
+        return self._ready
+
+    @property
+    def seconds_until_ready(self):
+        return 0.0 if self._ready else 7.2
+
+    def turn_on(self):
+        self.turn_on_calls += 1
+        if self.on:
+            return False
+        self.on = True
+        return True
+
+    def turn_off(self):
+        was_on, self.on = self.on, False
+        self._ready = False
+        return was_on
+
+    def toggle(self):
+        self.turn_off() if self.on else self.turn_on()
+        return self.on
+
+    def finish_starting(self):
+        self._ready = True
+
+
+class TestPowerButton:
+    @pytest.fixture
+    def powered(self, controller, weather):
+        inverter = FakeInverter()
+        return BedGui(controller, weather, inverter=inverter), inverter
+
+    def test_it_starts_showing_off(self, powered):
+        built, _ = powered
+        assert built.power_button.configure.call_args.kwargs["text"] == "230V aus"
+
+    def test_tapping_switches_it_on(self, powered):
+        built, inverter = powered
+        built._toggle_inverter()
+        assert inverter.on is True
+        assert built.power_button.configure.call_args.kwargs["text"] == "230V ein"
+
+    def test_tapping_again_switches_it_off(self, powered):
+        built, inverter = powered
+        built._toggle_inverter()
+        built._toggle_inverter()
+        assert inverter.on is False
+
+    def test_the_colour_follows_the_state(self, powered):
+        built, _ = powered
+        built._toggle_inverter()
+        assert built.power_button.configure.call_args.kwargs["fg_color"] == gui_module.POWER_ON_COLOR
+
+    def test_it_cannot_be_switched_while_the_bed_moves(self, powered, controller):
+        """Cutting mains mid travel drops the motors and the stored position with them."""
+        built, inverter = powered
+        built._toggle_inverter()
+        controller.is_moving = True
+        built._toggle_inverter()
+        assert inverter.on is True
+
+    def test_it_is_greyed_out_while_the_bed_moves(self, powered, controller):
+        built, _ = powered
+        controller.is_moving = True
+        built._update_power_button()
+        assert built.power_button.configure.call_args.kwargs["state"] == "disabled"
+
+
+class TestInverterBeforeMoving:
+    @pytest.fixture
+    def cold(self, controller, weather):
+        inverter = FakeInverter()
+        return BedGui(controller, weather, inverter=inverter), inverter
+
+    @pytest.fixture
+    def warm(self, controller, weather):
+        inverter = FakeInverter(on=True, ready=True)
+        return BedGui(controller, weather, inverter=inverter), inverter
+
+    def test_a_running_inverter_lets_the_move_start_at_once(self, warm, controller):
+        built, _ = warm
+        built._start_move(MoveContext.UP, controller.move_up)
+        controller.run_async.assert_called_once_with(controller.move_up)
+
+    def test_a_cold_inverter_is_switched_on(self, cold, controller):
+        built, inverter = cold
+        built._start_move(MoveContext.UP, controller.move_up)
+        assert inverter.on is True
+
+    def test_the_move_waits_for_the_start_up(self, cold, controller):
+        built, _ = cold
+        built._start_move(MoveContext.UP, controller.move_up)
+        assert not controller.run_async.called
+
+    def test_the_stop_button_shows_the_countdown(self, cold, controller):
+        built, _ = cold
+        built._start_move(MoveContext.UP, controller.move_up)
+        assert "230V" in built.stop_button.configure.call_args.kwargs["text"]
+        assert "8s" in built.stop_button.configure.call_args.kwargs["text"], "7.2s rounds up"
+
+    def test_the_countdown_keeps_itself_going(self, cold, controller):
+        built, _ = cold
+        built.app.after.reset_mock()
+        built._start_move(MoveContext.UP, controller.move_up)
+        delays = [c.args[0] for c in built.app.after.call_args_list]
+        assert gui_module.INVERTER_WAIT_TICK_MS in delays
+
+    def test_the_move_starts_once_the_inverter_is_up(self, cold, controller):
+        built, inverter = cold
+        built._start_move(MoveContext.UP, controller.move_up)
+        inverter.finish_starting()
+        built._wait_for_inverter()
+        controller.run_async.assert_called_once_with(controller.move_up)
+
+    def test_the_stop_button_says_stop_again_once_it_moves(self, cold, controller):
+        built, inverter = cold
+        built._start_move(MoveContext.UP, controller.move_up)
+        inverter.finish_starting()
+        built._wait_for_inverter()
+        assert built.stop_button.configure.call_args.kwargs["text"] == "STOP"
+
+    def test_the_move_starts_only_once(self, cold, controller):
+        """A tick that arrives after the movement already started must not start it twice."""
+        built, inverter = cold
+        built._start_move(MoveContext.UP, controller.move_up)
+        inverter.finish_starting()
+        built._wait_for_inverter()
+        built._wait_for_inverter()
+        assert controller.run_async.call_count == 1
+
+    def test_stop_during_the_countdown_drops_the_move(self, cold, controller):
+        built, inverter = cold
+        built._start_move(MoveContext.UP, controller.move_up)
+        built._on_stop()
+        inverter.finish_starting()
+        built._wait_for_inverter()
+        assert not controller.run_async.called
+
+    def test_stop_during_the_countdown_does_not_stop_the_controller(self, cold, controller):
+        """Nothing is moving yet; the stop belongs to the pending move, not the motors."""
+        built, _ = cold
+        built._start_move(MoveContext.UP, controller.move_up)
+        built._on_stop()
+        assert not controller.stop.called
+
+    def test_stop_during_the_countdown_leaves_the_inverter_running(self, cold, controller):
+        """It was asked for; switching it back off is the 230V button's job."""
+        built, inverter = cold
+        built._start_move(MoveContext.UP, controller.move_up)
+        built._on_stop()
+        assert inverter.on is True
+
+    def test_stop_during_the_countdown_gives_the_arrows_back(self, cold, controller):
+        built, _ = cold
+        built._start_move(MoveContext.UP, controller.move_up)
+        built.up_button.configure.reset_mock()
+        built._on_stop()
+        assert _states(built.up_button)[-1] == "normal"
+
+    def test_a_stop_while_moving_still_stops_the_motors(self, warm, controller):
+        built, _ = warm
+        built._start_move(MoveContext.UP, controller.move_up)
+        built._on_stop()
+        controller.stop.assert_called_once()

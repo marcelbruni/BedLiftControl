@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import sys
 import time
 import tkinter
@@ -14,6 +15,7 @@ import customtkinter as ctk
 
 from bedliftcontrol import clock, icons, jump
 from bedliftcontrol.game import IGNORED, MISMATCH, MemoryGame
+from bedliftcontrol.inverter import Inverter
 from bedliftcontrol.controller import BedController
 from bedliftcontrol.timesync import TimeSync
 from bedliftcontrol.weather import LOCATIONS, WEATHER_CODES, WeatherService, location_or_default
@@ -58,6 +60,10 @@ JUMP_GROUND_COLOR = "#5a6b78"
 JUMP_PLAYER_COLOR = "#43a047"
 JUMP_OBSTACLE_COLOR = "#c62828"
 JUMP_TEXT_COLOR = "#dce4ee"
+INVERTER_WAIT_TICK_MS = 250
+INVERTER_WAIT_FONT_SIZE = 22  # the countdown is three short lines, not one word
+POWER_ON_COLOR = "#43a047"
+POWER_OFF_COLOR = "#555555"
 
 POLL_INTERVAL_MS = 100
 WEATHER_UI_REFRESH_MS = 5000
@@ -106,13 +112,16 @@ class MoveContext(Enum):
 
 class BedGui:
     def __init__(self, controller: BedController, weather: WeatherService,
-                 timesync: TimeSync | None = None, history=None):
+                 timesync: TimeSync | None = None, history=None, inverter=None):
         self.controller = controller
         self.weather = weather
         self.history = history
+        self.inverter = inverter if inverter is not None else Inverter()
         # own default so existing callers keep working; it touches no network until started
         self.timesync = timesync if timesync is not None else TimeSync()
         self._move_context: MoveContext | None = None
+        self._pending_move = None
+        self._inverter_timer = None
         self._bar_fill_level = 0.0
         self._clock_text = None
         self._kiosk_button = None
@@ -148,7 +157,8 @@ class BedGui:
         ctk.CTkButton(bottom, text="⚙", width=50, command=self._settings_window).pack(side="left", padx=4, pady=6)
         self.corrections_button = ctk.CTkButton(bottom, text="↑↓", width=50, command=self._corrections_window)
         self.corrections_button.pack(side="left", padx=4, pady=6)
-        ctk.CTkButton(bottom, text="230V on/off", width=120, command=self._not_implemented_window).pack(side="left", padx=4, pady=6)
+        self.power_button = ctk.CTkButton(bottom, text="", width=120, command=self._toggle_inverter)
+        self.power_button.pack(side="left", padx=4, pady=6)
         ctk.CTkButton(bottom, text="Wetter-Icons", width=120, command=self._weather_icons_window).pack(side="left", padx=4, pady=6)
         self.location_button = ctk.CTkButton(bottom, text="Ort", width=70, command=self._location_window)
         self.location_button.pack(side="left", padx=4, pady=6)
@@ -200,6 +210,7 @@ class BedGui:
         # initial state reflects the stored position
         self._update_move_buttons()
         self._update_corrections_button()
+        self._update_power_button()
         self._set_bar(self.controller.position_fraction)
         self._update_clock()
         self._refresh_weather()
@@ -263,7 +274,26 @@ class BedGui:
         self.stop_button.place_forget()
 
     def _on_stop(self) -> None:
+        if self._pending_move is not None:
+            self._cancel_pending_move()
+            return
         self.controller.stop()
+
+    def _toggle_inverter(self) -> None:
+        # cutting mains mid travel would drop the motors and leave the stored position
+        # pointing somewhere the bed no longer is
+        if self.controller.is_moving:
+            return
+        self.inverter.toggle()
+        self._update_power_button()
+
+    def _update_power_button(self) -> None:
+        on = self.inverter.on
+        self.power_button.configure(
+            text="230V ein" if on else "230V aus",
+            fg_color=POWER_ON_COLOR if on else POWER_OFF_COLOR,
+            state="disabled" if self.controller.is_moving else "normal",
+        )
 
     def _start_move(self, context: MoveContext, action) -> None:
         self._set_enabled(self.up_button, False)
@@ -274,8 +304,42 @@ class BedGui:
         self._on_window_closed("corrections")
         self._show_stop_button()
         self._move_context = context
-        self.controller.run_async(action)
-        self._schedule_poll()
+        self._pending_move = action
+        self.inverter.turn_on()
+        self._update_power_button()
+        self._wait_for_inverter()
+
+    def _wait_for_inverter(self) -> None:
+        """The motors hang off the inverter, so the movement waits out its start-up."""
+        if self._pending_move is None:  # STOP was pressed during the countdown
+            return
+        remaining = self.inverter.seconds_until_ready
+        if remaining <= 0:
+            action, self._pending_move = self._pending_move, None
+            self._set_stop_button_text("STOP", STOP_FONT_SIZE)
+            self.controller.run_async(action)
+            self._schedule_poll()
+            return
+        self._set_stop_button_text(f"230V\nstartet\n{math.ceil(remaining)}s",
+                                   INVERTER_WAIT_FONT_SIZE)
+        self._inverter_timer = self.app.after(INVERTER_WAIT_TICK_MS, self._wait_for_inverter)
+
+    def _set_stop_button_text(self, text: str, size: int) -> None:
+        self.stop_button.configure(text=text, font=ctk.CTkFont(size=size, weight="bold"))
+
+    def _cancel_pending_move(self) -> None:
+        """STOP during the start-up: the movement is dropped, the inverter keeps running.
+        It was switched on deliberately and the 230V button is the way back off."""
+        self._pending_move = None
+        if self._inverter_timer is not None:
+            self.app.after_cancel(self._inverter_timer)
+            self._inverter_timer = None
+        self._set_stop_button_text("STOP", STOP_FONT_SIZE)
+        self._hide_stop_button()
+        self._move_context = None
+        self._update_move_buttons()
+        self._update_corrections_button()
+        self._update_power_button()
 
     def _schedule_poll(self) -> None:
         self.app.after(POLL_INTERVAL_MS, self._poll_movement)
@@ -316,6 +380,7 @@ class BedGui:
         self._set_bar(self.controller.position_fraction)
         self._update_move_buttons()
         self._update_corrections_button()
+        self._update_power_button()
         # only prompt when the bed really arrived at an end stop - after a stop in
         # between it is hanging somewhere and either prompt would be plain wrong
         if self._move_context == MoveContext.UP and self.controller.at_top:

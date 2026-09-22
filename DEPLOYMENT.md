@@ -35,6 +35,9 @@ Die App merkt sich die Bettposition **in Schritten**, nicht nur als oben/unten:
 > nicht anfasst. Zähler und Standorte stehen unter ⚙ → „Historie", die Rekorde
 > im jeweiligen Spiel.
 
+Wenn das Relais für den Wechselrichter noch nicht verdrahtet ist: das steht in
+[WIRING.md](WIRING.md) und ist unabhängig von dieser Anleitung.
+
 Ausserdem: **Internet am Pi** (z. B. Handy-Tethering). Nötig für das Klonen und
 das Installieren der Pakete — danach läuft die App offline.
 

@@ -38,12 +38,14 @@ BedLiftControl/
 │       ├── gui.py           # BedGui: CustomTkinter user interface
 │       ├── history.py       # Night counter and location history
 │       ├── icons.py         # Canvas-drawn weather icons
+│       ├── inverter.py      # 230V inverter, switched over its remote contact
 │       ├── jump.py          # Jump game physics (no Tk)
 │       ├── main.py          # Entry point
 │       ├── timesync.py      # Keeps the shown clock right when the Pi's is not
 │       └── weather.py       # Location, forecast and the WMO code table
 ├── tests/
 ├── DEPLOYMENT.md
+├── WIRING.md
 ├── pyproject.toml
 ├── requirements.txt
 ├── requirements-dev.txt
@@ -127,12 +129,16 @@ python -m venv .venv
 Two stepper motor drivers (front and back), each wired with a pulse (PUL) and
 direction (DIR) pin:
 
-| Signal     | GPIO (BCM) |
-|------------|------------|
-| FRONT_PUL  | 27         |
-| FRONT_DIR  | 22         |
-| BACK_PUL   | 24         |
-| BACK_DIR   | 23         |
+| Signal          | GPIO (BCM) | Board pin |
+|-----------------|------------|-----------|
+| FRONT_PUL       | 27         | 13        |
+| FRONT_DIR       | 22         | 15        |
+| BACK_PUL        | 24         | 18        |
+| BACK_DIR        | 23         | 16        |
+| INVERTER_REMOTE | 17         | 11        |
+
+The inverter pin drives a relay across the inverter's remote terminal, see below.
+Step-by-step wiring instructions are in [WIRING.md](WIRING.md).
 
 ## Configuration
 
@@ -153,6 +159,28 @@ when a movement is stopped.
 `position_steps` is the single source of truth for the bed position. Editing
 `bed_up` by hand has no effect — it is overwritten from `position_steps` on the
 next save.
+
+## 230V inverter
+
+The motors run off a Victron inverter whose remote terminal is a potential-free contact:
+closed means on. A relay on GPIO 17 sits across that contact, so the app can switch mains
+power the same way a wall switch would.
+
+The "230V" button in the bottom bar switches it by hand and shows the state. Starting a
+bed movement switches it on by itself and waits `STARTUP_SECONDS` (10s) before the motors
+turn — the inverter's output is not stable the instant the contact closes. The wait is
+shown as a countdown on the STOP button, and STOP during the countdown drops the movement
+while leaving the inverter running.
+
+Two deliberate choices:
+
+- **The state is not persisted.** After a restart the relay is open and the inverter off.
+  Restoring "on" at boot would switch mains power on in an unattended vehicle.
+- **The button is dead while the bed moves.** Cutting power mid travel would drop the
+  motors and leave `position_steps` pointing at a place the bed no longer is.
+
+Closing the app releases the GPIO pins, which opens the relay and switches the inverter
+off as well.
 
 ## Weather
 
