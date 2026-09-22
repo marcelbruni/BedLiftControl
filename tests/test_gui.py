@@ -83,6 +83,8 @@ def controller():
     fake.config.total_steps = 28000
     fake.config.speed_pps = 800.0
     fake.config.kiosk = False
+    fake.config.inverter_startup_seconds = 10.0
+    fake.config.inverter_auto_start = True
     return fake
 
 
@@ -1391,6 +1393,7 @@ class FakeInverter:
 
     def __init__(self, on=False, ready=False):
         self.on = on
+        self.startup_seconds = 10.0
         self._ready = ready
         self.turn_on_calls = 0
 
@@ -1560,3 +1563,118 @@ class TestInverterBeforeMoving:
         built._start_move(MoveContext.UP, controller.move_up)
         built._on_stop()
         controller.stop.assert_called_once()
+
+
+class TestInverterSettings:
+    @pytest.fixture
+    def settings(self, controller, weather):
+        import customtkinter
+
+        inverter = FakeInverter()
+        built = BedGui(controller, weather, inverter=inverter)
+        customtkinter.CTkSlider.reset_mock()
+        customtkinter.CTkButton.reset_mock()
+        built._settings_window()
+        return built, inverter
+
+    @staticmethod
+    def button_texts():
+        import customtkinter
+
+        return [c.kwargs.get("text") for c in customtkinter.CTkButton.call_args_list]
+
+    def test_the_delay_slider_spans_zero_to_fifteen(self, settings):
+        import customtkinter
+
+        bounds = [(c.kwargs.get("from_"), c.kwargs.get("to"))
+                  for c in customtkinter.CTkSlider.call_args_list]
+        assert (0.0, 15.0) in bounds
+
+    def test_the_delay_slider_snaps_to_whole_seconds(self, settings):
+        import customtkinter
+
+        steps = [c.kwargs.get("number_of_steps") for c in customtkinter.CTkSlider.call_args_list]
+        assert 15 in steps
+
+    def test_moving_the_slider_stores_the_value(self, settings, controller):
+        built, _ = settings
+        built._on_inverter_delay_change(4.0)
+        assert controller.config.inverter_startup_seconds == 4.0
+        controller.config.save.assert_called()
+
+    def test_moving_the_slider_reaches_the_inverter(self, settings):
+        """Otherwise the new value would only take effect after a restart."""
+        built, inverter = settings
+        built._on_inverter_delay_change(3.0)
+        assert inverter.startup_seconds == 3.0
+
+    def test_a_slider_position_between_seconds_is_rounded(self, settings, controller):
+        built, _ = settings
+        built._on_inverter_delay_change(6.4)
+        assert controller.config.inverter_startup_seconds == 6.0
+
+    def test_the_value_is_shown_next_to_the_slider(self, settings):
+        built, _ = settings
+        built._on_inverter_delay_change(7.0)
+        built._delay_value_label.configure.assert_called_with(text="7 s")
+
+    def test_zero_seconds_can_be_set(self, settings, controller):
+        built, inverter = settings
+        built._on_inverter_delay_change(0.0)
+        assert controller.config.inverter_startup_seconds == 0.0
+        assert inverter.startup_seconds == 0.0
+
+    def test_the_switch_offers_to_turn_the_automatic_off(self, settings):
+        assert "230V-Automatik ausschalten" in self.button_texts()
+
+    def test_the_switch_offers_to_turn_it_on_again(self, controller, weather):
+        controller.config.inverter_auto_start = False
+        built = BedGui(controller, weather, inverter=FakeInverter())
+        built._settings_window()
+        assert "230V-Automatik einschalten" in self.button_texts()
+
+    def test_tapping_the_switch_turns_the_automatic_off(self, settings, controller):
+        built, _ = settings
+        built._toggle_auto_start()
+        assert controller.config.inverter_auto_start is False
+        controller.config.save.assert_called()
+
+    def test_tapping_the_switch_relabels_it(self, settings):
+        built, _ = settings
+        built._toggle_auto_start()
+        built._auto_start_button.configure.assert_called_with(text="230V-Automatik einschalten")
+
+    def test_tapping_twice_is_back_where_it_started(self, settings, controller):
+        built, _ = settings
+        built._toggle_auto_start()
+        built._toggle_auto_start()
+        assert controller.config.inverter_auto_start is True
+
+
+class TestAutomaticSwitchedOff:
+    @pytest.fixture
+    def manual(self, controller, weather):
+        controller.config.inverter_auto_start = False
+        inverter = FakeInverter()
+        return BedGui(controller, weather, inverter=inverter), inverter
+
+    def test_the_inverter_is_left_alone(self, manual, controller):
+        built, inverter = manual
+        built._start_move(MoveContext.UP, controller.move_up)
+        assert inverter.turn_on_calls == 0
+        assert inverter.on is False
+
+    def test_the_move_starts_without_waiting(self, manual, controller):
+        built, _ = manual
+        built._start_move(MoveContext.UP, controller.move_up)
+        controller.run_async.assert_called_once_with(controller.move_up)
+
+    def test_no_countdown_is_shown(self, manual, controller):
+        built, _ = manual
+        built._start_move(MoveContext.UP, controller.move_up)
+        assert built.stop_button.configure.call_args.kwargs["text"] == "STOP"
+
+    def test_the_power_button_still_works_by_hand(self, manual):
+        built, inverter = manual
+        built._toggle_inverter()
+        assert inverter.on is True

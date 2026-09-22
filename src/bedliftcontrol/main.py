@@ -19,7 +19,7 @@ def main() -> None:
     config = Config.load()
     history = History()
     controller = BedController(config, history)
-    inverter = Inverter()
+    inverter = Inverter(startup_seconds=config.inverter_startup_seconds)
     weather = WeatherService(selected=config.weather_location, history=history)
     timesync = TimeSync()
     gui = BedGui(controller, weather, timesync, history, inverter)

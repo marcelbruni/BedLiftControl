@@ -522,3 +522,41 @@ class TestHistoryHook:
         config = Config(total_steps=50, speed_pps=800.0, bed_up=False, position_steps=0,
                         path=str(tmp_path / "config.json"))
         BedController(config).move_up()  # must not raise
+
+
+class TestConfigInverter:
+    def test_the_delay_defaults_to_ten_seconds(self, tmp_path):
+        assert Config.load(str(tmp_path / "missing.json")).inverter_startup_seconds == 10.0
+
+    def test_the_automatic_defaults_to_on(self, tmp_path):
+        assert Config.load(str(tmp_path / "missing.json")).inverter_auto_start is True
+
+    def test_both_survive_a_save_and_load(self, tmp_path):
+        path = str(tmp_path / "config.json")
+        Config(inverter_startup_seconds=4.0, inverter_auto_start=False, path=path).save()
+        loaded = Config.load(path)
+        assert loaded.inverter_startup_seconds == 4.0
+        assert loaded.inverter_auto_start is False
+
+    def test_zero_is_allowed(self, tmp_path):
+        path = str(tmp_path / "config.json")
+        Config(inverter_startup_seconds=0.0, path=path).save()
+        assert Config.load(path).inverter_startup_seconds == 0.0
+
+    def test_a_delay_above_the_maximum_is_clamped(self, tmp_path):
+        assert Config(inverter_startup_seconds=99.0,
+                      path=str(tmp_path / "c.json")).inverter_startup_seconds == 15.0
+
+    def test_a_negative_delay_is_clamped(self, tmp_path):
+        assert Config(inverter_startup_seconds=-5.0,
+                      path=str(tmp_path / "c.json")).inverter_startup_seconds == 0.0
+
+    def test_a_config_written_before_the_inverter_existed_keeps_its_values(self, tmp_path):
+        import json
+
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({"total_steps": 29500, "speed_pps": 1200.0, "bed_up": False}))
+        config = Config.load(str(path))
+        assert config.total_steps == 29500
+        assert config.inverter_startup_seconds == 10.0
+        assert config.inverter_auto_start is True

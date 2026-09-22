@@ -16,6 +16,7 @@ import customtkinter as ctk
 from bedliftcontrol import clock, icons, jump
 from bedliftcontrol.game import IGNORED, MISMATCH, MemoryGame
 from bedliftcontrol.inverter import Inverter
+from bedliftcontrol.config import INVERTER_STARTUP_MAX, INVERTER_STARTUP_MIN
 from bedliftcontrol.controller import BedController
 from bedliftcontrol.timesync import TimeSync
 from bedliftcontrol.weather import LOCATIONS, WEATHER_CODES, WeatherService, location_or_default
@@ -95,6 +96,7 @@ STEPS_MIN = 27000
 STEPS_MAX = 30000
 SPEED_MIN = 200
 SPEED_MAX = 1400
+INVERTER_DELAY_STEPS = int(INVERTER_STARTUP_MAX - INVERTER_STARTUP_MIN)  # whole seconds
 
 
 def _panel_background() -> str:
@@ -137,6 +139,8 @@ class BedGui:
         self._open_windows: dict[str, object] = {}
         self._steps_value_label = None
         self._speed_value_label = None
+        self._delay_value_label = None
+        self._auto_start_button = None
         self._forecast_labels = []
         self._rendered_forecast_key = None
         self._build()
@@ -305,15 +309,19 @@ class BedGui:
         self._show_stop_button()
         self._move_context = context
         self._pending_move = action
-        self.inverter.turn_on()
-        self._update_power_button()
+        # with the automatic switched off the movement is the user's business: nothing
+        # is switched on, and nothing is waited for
+        if self.controller.config.inverter_auto_start:
+            self.inverter.turn_on()
+            self._update_power_button()
         self._wait_for_inverter()
 
     def _wait_for_inverter(self) -> None:
         """The motors hang off the inverter, so the movement waits out its start-up."""
         if self._pending_move is None:  # STOP was pressed during the countdown
             return
-        remaining = self.inverter.seconds_until_ready
+        remaining = (self.inverter.seconds_until_ready
+                     if self.controller.config.inverter_auto_start else 0.0)
         if remaining <= 0:
             action, self._pending_move = self._pending_move, None
             self._set_stop_button_text("STOP", STOP_FONT_SIZE)
@@ -451,6 +459,8 @@ class BedGui:
         window = self._open_windows.pop(name, None)
         if name == "settings":
             self._kiosk_button = None
+            self._auto_start_button = None
+            self._delay_value_label = None
         if name == "corrections":
             # the buttons are about to be destroyed, so no release event is coming
             self._cancel_correction_timer()
@@ -471,7 +481,7 @@ class BedGui:
     def _build_settings_window(self):
         window = ctk.CTkToplevel(self.app)
         window.title("Settings")
-        window.geometry("560x340")
+        window.geometry("560x430")
         content = ctk.CTkFrame(window, fg_color="transparent")
         content.pack(expand=True)
         ctk.CTkLabel(content, text="total steps").grid(row=0, column=0, padx=12, pady=12, sticky="e")
@@ -486,19 +496,53 @@ class BedGui:
         speed_slider.grid(row=1, column=1, padx=12, pady=12)
         self._speed_value_label = ctk.CTkLabel(content, text=str(int(self.controller.config.speed_pps)), width=60)
         self._speed_value_label.grid(row=1, column=2, padx=(4, 0))
+        ctk.CTkLabel(content, text="230V Anlauf").grid(row=2, column=0, padx=12, pady=12, sticky="e")
+        delay_slider = ctk.CTkSlider(content, from_=INVERTER_STARTUP_MIN, to=INVERTER_STARTUP_MAX,
+                                     number_of_steps=INVERTER_DELAY_STEPS, width=300,
+                                     command=self._on_inverter_delay_change)
+        delay_slider.set(self.controller.config.inverter_startup_seconds)
+        delay_slider.grid(row=2, column=1, padx=12, pady=12)
+        self._delay_value_label = ctk.CTkLabel(
+            content, text=self._delay_text(self.controller.config.inverter_startup_seconds), width=60)
+        self._delay_value_label.grid(row=2, column=2, padx=(4, 0))
+        self._auto_start_button = ctk.CTkButton(content, text=self._auto_start_button_text(), width=300,
+                                                command=self._toggle_auto_start)
+        self._auto_start_button.grid(row=3, column=0, columnspan=3, padx=12, pady=(10, 6))
         self._kiosk_button = ctk.CTkButton(content, text=self._kiosk_button_text(), width=300,
                                            command=self._toggle_kiosk)
-        self._kiosk_button.grid(row=2, column=0, columnspan=3, padx=12, pady=(16, 6))
+        self._kiosk_button.grid(row=4, column=0, columnspan=3, padx=12, pady=(6, 6))
         ctk.CTkButton(content, text="Historie", width=300,
-                      command=self._history_window).grid(row=3, column=0, columnspan=3,
+                      command=self._history_window).grid(row=5, column=0, columnspan=3,
                                                          padx=12, pady=(6, 6))
         ctk.CTkButton(content, text="Memory spielen", width=300,
-                      command=self._game_window).grid(row=4, column=0, columnspan=3,
+                      command=self._game_window).grid(row=6, column=0, columnspan=3,
                                                       padx=12, pady=(6, 6))
         ctk.CTkButton(content, text="Hüpfen spielen", width=300,
-                      command=self._jump_window).grid(row=5, column=0, columnspan=3,
+                      command=self._jump_window).grid(row=7, column=0, columnspan=3,
                                                       padx=12, pady=(6, 12))
         return window
+
+    @staticmethod
+    def _delay_text(seconds) -> str:
+        return f"{round(seconds)} s"
+
+    def _on_inverter_delay_change(self, value) -> None:
+        seconds = float(round(value))
+        self.controller.config.inverter_startup_seconds = seconds
+        self.controller.config.save()
+        self.inverter.startup_seconds = seconds
+        if self._delay_value_label is not None:
+            self._delay_value_label.configure(text=self._delay_text(seconds))
+
+    def _auto_start_button_text(self) -> str:
+        return ("230V-Automatik ausschalten" if self.controller.config.inverter_auto_start
+                else "230V-Automatik einschalten")
+
+    def _toggle_auto_start(self) -> None:
+        self.controller.config.inverter_auto_start = not self.controller.config.inverter_auto_start
+        self.controller.config.save()
+        if self._auto_start_button is not None:
+            self._auto_start_button.configure(text=self._auto_start_button_text())
 
     def _on_steps_change(self, value) -> None:
         self.controller.config.total_steps = int(value)

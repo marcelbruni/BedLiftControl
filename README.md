@@ -152,6 +152,8 @@ All settings live in a single file, `data/config.json`:
 | `bed_up`         | Derived from `position_steps`, not maintained by hand     |
 | `kiosk`          | Fullscreen instead of a window                           |
 | `weather_location` | Selected weather location, `phone` follows the public IP |
+| `inverter_startup_seconds` | How long a movement waits after switching the inverter on (0-15) |
+| `inverter_auto_start` | Whether a movement switches the inverter on by itself |
 
 The file is written automatically when settings change, when the bed is moved and
 when a movement is stopped.
@@ -167,10 +169,15 @@ closed means on. A relay on GPIO 17 sits across that contact, so the app can swi
 power the same way a wall switch would.
 
 The "230V" button in the bottom bar switches it by hand and shows the state. Starting a
-bed movement switches it on by itself and waits `STARTUP_SECONDS` (10s) before the motors
-turn — the inverter's output is not stable the instant the contact closes. The wait is
-shown as a countdown on the STOP button, and STOP during the countdown drops the movement
-while leaving the inverter running.
+bed movement switches it on by itself and waits before the motors turn — the inverter's
+output is not stable the instant the contact closes. The wait is shown as a countdown on
+the STOP button, and STOP during the countdown drops the movement while leaving the
+inverter running.
+
+Both halves of that are settings: **230V Anlauf** sets the wait anywhere from 0 to 15
+seconds, and **230V-Automatik** turns the automatic switching off altogether, leaving the
+inverter entirely to the button. With the automatic off nothing is switched on and
+nothing is waited for — a movement then runs on whatever power is already there.
 
 Two deliberate choices:
 

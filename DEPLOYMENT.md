@@ -28,6 +28,8 @@ Die App merkt sich die Bettposition **in Schritten**, nicht nur als oben/unten:
 | `bed_up` | Wird aus `position_steps` abgeleitet, nicht von Hand gepflegt |
 | `kiosk` | Vollbildmodus (siehe Schritt 13) |
 | `weather_location` | Ausgewählter Wetter-Ort, Standard `phone` (Handystandort) |
+| `inverter_startup_seconds` | Wartezeit nach dem Einschalten des Wechselrichters, 0–15 s |
+| `inverter_auto_start` | Ob eine Bettfahrt den Wechselrichter selbst einschaltet |
 
 > **`data/history.json` ist eine andere Datei** und steht bewusst nicht in git:
 > dort liegen der Übernachtungszähler, die Standort-Historie und die beiden

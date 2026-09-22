@@ -157,6 +157,8 @@ Fernbedienung.
 3. Einen Pfeil antippen. Über beiden Pfeilen erscheint ein Countdown
    („230V startet … 10s"), danach fährt das Bett. War der Wechselrichter schon
    an und eingelaufen, geht es ohne Wartezeit los.
+   Miss dabei, wie lange dein Gerät wirklich braucht — die Wartezeit stellst du
+   unter ⚙ → **230V Anlauf** zwischen 0 und 15 Sekunden ein.
 4. Während der Fahrt ist der 230V-Knopf ausgegraut — mitten in der Fahrt die
    Motoren stromlos zu machen würde die gespeicherte Bettposition verfälschen.
 
@@ -172,5 +174,6 @@ Fernbedienung.
 | Wechselrichter geht beim Schliessen der App aus | Kein Fehler. Die App gibt die GPIO-Pins frei, das Relais fällt ab. |
 | Nach einem Neustart ist der Wechselrichter aus | Kein Fehler, so gewollt. Der Zustand wird bewusst nicht gespeichert; unbeaufsichtigt 230V einzuschalten wäre die schlechtere Voreinstellung. |
 | Bett fährt trotz Countdown nicht los | Countdown abgelaufen? Im Log steht `Inverter switched on, ready in 10s`. Fehlt die Zeile, kam der Aufruf nicht an — dann ist das Modul nicht an GPIO 17. |
-| Der Anlauf dauert länger als 10 Sekunden | `STARTUP_SECONDS` in `src/bedliftcontrol/inverter.py` hochsetzen. |
+| Der Anlauf dauert länger oder kürzer als 10 Sekunden | ⚙ → **230V Anlauf**, Schieberegler zwischen 0 und 15 Sekunden. |
+| Das Bett soll ohne automatisches Einschalten fahren | ⚙ → **230V-Automatik ausschalten**. Der 230V-Knopf bleibt davon unberührt. |
 | Wechselrichter startet sporadisch nicht mehr, Relais klickt aber | Nach Jahren möglich: der Kontakt schaltet fast stromlos und kann eine dünne Oxidschicht ansetzen. Modul tauschen, oder eines mit vergoldeten Kontakten nehmen. |
