@@ -13,8 +13,7 @@ from tkinter import messagebox
 
 import customtkinter as ctk
 
-from bedliftcontrol import clock, icons, jump
-from bedliftcontrol.game import IGNORED, MISMATCH, MemoryGame
+from bedliftcontrol import clock, icons
 from bedliftcontrol.inverter import Inverter
 from bedliftcontrol.config import INVERTER_STARTUP_MAX, INVERTER_STARTUP_MIN
 from bedliftcontrol.controller import BedController
@@ -44,26 +43,14 @@ CORRECTION_BUTTON_HEIGHT = 90
 # released sooner and it is a plain click worth CORRECTION_STEPS.
 CORRECTION_HOLD_DELAY_MS = 400
 LOCATION_BUTTON_WIDTH = 260
+KIOSK_BUTTON_WIDTH = 190   # the longest label of the three, side by side in one row
+SETTINGS_BUTTON_WIDTH = 120
 LOCATION_BUTTON_HEIGHT = 44
 HISTORY_ROW_PITCH = 26
 HISTORY_WIDTH = 420
-GAME_CARD_SIZE = 64
-GAME_COLUMNS = 4
-GAME_CARD_PAD = 4
-GAME_MISMATCH_DELAY_MS = 900
-GAME_CARD_BACK_COLOR = "#2f4f6a"
-GAME_CARD_MATCHED_COLOR = "#1f3a2a"
-JUMP_TICK_MS = 33
-JUMP_CANVAS_HEIGHT = 150
-JUMP_GROUND_Y = 130  # leaves 130 units of air for a jump that peaks at 105
-JUMP_SKY_COLOR = "#1b2a38"
-JUMP_GROUND_COLOR = "#5a6b78"
-JUMP_PLAYER_COLOR = "#43a047"
-JUMP_OBSTACLE_COLOR = "#c62828"
-JUMP_TEXT_COLOR = "#dce4ee"
 INVERTER_WAIT_TICK_MS = 250
 INVERTER_WAIT_FONT_SIZE = 22  # the countdown is three short lines, not one word
-POWER_ON_COLOR = "#43a047"
+POWER_ON_COLOR = "#c62828"  # red while mains is live: a warning, not a status
 POWER_OFF_COLOR = "#555555"
 
 POLL_INTERVAL_MS = 100
@@ -129,18 +116,10 @@ class BedGui:
         self._kiosk_button = None
         self._correction_timer = None
         self._correction_holding = False
-        self._game = None
-        self._game_cards = []
-        self._jump = None
-        self._jump_canvas = None
-        self._jump_timer = None
-        self._jump_tick_at = None
-        self._jump_record = False
         self._open_windows: dict[str, object] = {}
         self._steps_value_label = None
         self._speed_value_label = None
         self._delay_value_label = None
-        self._auto_start_button = None
         self._forecast_labels = []
         self._rendered_forecast_key = None
         self._build()
@@ -161,11 +140,10 @@ class BedGui:
         ctk.CTkButton(bottom, text="⚙", width=50, command=self._settings_window).pack(side="left", padx=4, pady=6)
         self.corrections_button = ctk.CTkButton(bottom, text="↑↓", width=50, command=self._corrections_window)
         self.corrections_button.pack(side="left", padx=4, pady=6)
-        self.power_button = ctk.CTkButton(bottom, text="", width=120, command=self._toggle_inverter)
-        self.power_button.pack(side="left", padx=4, pady=6)
-        ctk.CTkButton(bottom, text="Wetter-Icons", width=120, command=self._weather_icons_window).pack(side="left", padx=4, pady=6)
         self.location_button = ctk.CTkButton(bottom, text="Ort", width=70, command=self._location_window)
         self.location_button.pack(side="left", padx=4, pady=6)
+        self.power_button = ctk.CTkButton(bottom, text="", width=120, command=self._toggle_inverter)
+        self.power_button.pack(side="left", padx=4, pady=6)
         self._build_clock_panel(bottom)
 
         # left vertical bar: empty when the bed is up, fills from the top down as the
@@ -309,28 +287,32 @@ class BedGui:
         self._show_stop_button()
         self._move_context = context
         self._pending_move = action
-        # with the automatic switched off the movement is the user's business: nothing
-        # is switched on, and nothing is waited for
-        if self.controller.config.inverter_auto_start:
-            self.inverter.turn_on()
-            self._update_power_button()
+        self.inverter.turn_on()
+        self._update_power_button()
         self._wait_for_inverter()
 
     def _wait_for_inverter(self) -> None:
         """The motors hang off the inverter, so the movement waits out its start-up."""
         if self._pending_move is None:  # STOP was pressed during the countdown
             return
-        remaining = (self.inverter.seconds_until_ready
-                     if self.controller.config.inverter_auto_start else 0.0)
+        remaining = self.inverter.seconds_until_ready
         if remaining <= 0:
             action, self._pending_move = self._pending_move, None
             self._set_stop_button_text("STOP", STOP_FONT_SIZE)
             self.controller.run_async(action)
             self._schedule_poll()
             return
-        self._set_stop_button_text(f"230V\nstartet\n{math.ceil(remaining)}s",
+        self._set_stop_button_text(self._countdown_text(math.ceil(remaining)),
                                    INVERTER_WAIT_FONT_SIZE)
         self._inverter_timer = self.app.after(INVERTER_WAIT_TICK_MS, self._wait_for_inverter)
+
+    def _countdown_text(self, seconds: int) -> str:
+        text = f"230V\nstartet\n{seconds}s"
+        if self._move_context == MoveContext.DOWN and self.controller.at_top:
+            # the ropes hold the bed up there and have to come off before it can be
+            # lowered; waiting out the start-up is exactly the time to do it
+            text += "\n\nSeile lösen!"
+        return text
 
     def _set_stop_button_text(self, text: str, size: int) -> None:
         self.stop_button.configure(text=text, font=ctk.CTkFont(size=size, weight="bold"))
@@ -355,22 +337,11 @@ class BedGui:
     def _on_up(self) -> None:
         if self.controller.is_moving:
             return
-        # Parked at the bottom the motors are off, so ask before anything moves.
-        # askokcancel, not showinfo: it is the one that reliably reports a dismissed
-        # dialog as False on both Windows and the Pi, and closing it must change nothing.
-        if self.controller.at_bottom:
-            if not messagebox.askokcancel("Bett hochfahren", "Motoren einschalten."):
-                return
         self._start_move(MoveContext.UP, self.controller.move_up)
 
     def _on_down(self) -> None:
         if self.controller.is_moving:
             return
-        # only worth saying when the bed is actually parked at the top: that is when the
-        # ropes are attached and the motors are off. Carrying on after a stop in between
-        # means both are already done.
-        if self.controller.at_top:
-            messagebox.showinfo("Bett herunterfahren", "Motoren einschalten und Sicherungsseile lösen!")
         self._start_move(MoveContext.DOWN, self.controller.move_down)
 
     def _poll_movement(self) -> None:
@@ -389,13 +360,21 @@ class BedGui:
         self._update_move_buttons()
         self._update_corrections_button()
         self._update_power_button()
-        # only prompt when the bed really arrived at an end stop - after a stop in
-        # between it is hanging somewhere and either prompt would be plain wrong
+        # only act when the bed really arrived at an end stop - after a stop in
+        # between it is hanging somewhere and still needs the motors
         if self._move_context == MoveContext.UP and self.controller.at_top:
-            messagebox.showinfo("Bett oben", "Sicherungsseile anbringen und Motoren ausschalten!")
+            # the ropes go on while the motors still hold the bed, so the prompt comes
+            # first and mains is cut once it is acknowledged
+            messagebox.showinfo("Bett sichern", "Sicherungsseile anbringen!")
+            self._switch_off_after_move()
         elif self._move_context == MoveContext.DOWN and self.controller.at_bottom:
-            messagebox.showinfo("Bett unten", "Motoren ausschalten. Gute Nacht!")
+            self._switch_off_after_move()
         self._move_context = None
+
+    def _switch_off_after_move(self) -> None:
+        """Parked at an end stop, nothing draws mains any more."""
+        if self.inverter.turn_off():
+            self._update_power_button()
 
     def _correct(self, action) -> None:
         if self.controller.is_moving:
@@ -459,19 +438,11 @@ class BedGui:
         window = self._open_windows.pop(name, None)
         if name == "settings":
             self._kiosk_button = None
-            self._auto_start_button = None
             self._delay_value_label = None
         if name == "corrections":
             # the buttons are about to be destroyed, so no release event is coming
             self._cancel_correction_timer()
             self._end_correction_hold()
-        if name == "game":
-            self._game = None
-            self._game_cards = []
-        if name == "jump":
-            self._stop_jump_loop()
-            self._jump = None
-            self._jump_canvas = None
         if window is not None:
             window.destroy()
 
@@ -481,7 +452,7 @@ class BedGui:
     def _build_settings_window(self):
         window = ctk.CTkToplevel(self.app)
         window.title("Settings")
-        window.geometry("560x430")
+        window.geometry("520x250")
         content = ctk.CTkFrame(window, fg_color="transparent")
         content.pack(expand=True)
         ctk.CTkLabel(content, text="total steps").grid(row=0, column=0, padx=12, pady=12, sticky="e")
@@ -505,21 +476,15 @@ class BedGui:
         self._delay_value_label = ctk.CTkLabel(
             content, text=self._delay_text(self.controller.config.inverter_startup_seconds), width=60)
         self._delay_value_label.grid(row=2, column=2, padx=(4, 0))
-        self._auto_start_button = ctk.CTkButton(content, text=self._auto_start_button_text(), width=300,
-                                                command=self._toggle_auto_start)
-        self._auto_start_button.grid(row=3, column=0, columnspan=3, padx=12, pady=(10, 6))
-        self._kiosk_button = ctk.CTkButton(content, text=self._kiosk_button_text(), width=300,
-                                           command=self._toggle_kiosk)
-        self._kiosk_button.grid(row=4, column=0, columnspan=3, padx=12, pady=(6, 6))
-        ctk.CTkButton(content, text="Historie", width=300,
-                      command=self._history_window).grid(row=5, column=0, columnspan=3,
-                                                         padx=12, pady=(6, 6))
-        ctk.CTkButton(content, text="Memory spielen", width=300,
-                      command=self._game_window).grid(row=6, column=0, columnspan=3,
-                                                      padx=12, pady=(6, 6))
-        ctk.CTkButton(content, text="Hüpfen spielen", width=300,
-                      command=self._jump_window).grid(row=7, column=0, columnspan=3,
-                                                      padx=12, pady=(6, 12))
+        buttons = ctk.CTkFrame(content, fg_color="transparent")
+        buttons.grid(row=3, column=0, columnspan=3, padx=12, pady=(16, 12))
+        self._kiosk_button = ctk.CTkButton(buttons, text=self._kiosk_button_text(),
+                                           width=KIOSK_BUTTON_WIDTH, command=self._toggle_kiosk)
+        self._kiosk_button.pack(side="left", padx=(0, 8))
+        ctk.CTkButton(buttons, text="Wetter-Icons", width=SETTINGS_BUTTON_WIDTH,
+                      command=self._weather_icons_window).pack(side="left", padx=8)
+        ctk.CTkButton(buttons, text="Historie", width=SETTINGS_BUTTON_WIDTH,
+                      command=self._history_window).pack(side="left", padx=(8, 0))
         return window
 
     @staticmethod
@@ -533,16 +498,6 @@ class BedGui:
         self.inverter.startup_seconds = seconds
         if self._delay_value_label is not None:
             self._delay_value_label.configure(text=self._delay_text(seconds))
-
-    def _auto_start_button_text(self) -> str:
-        return ("230V-Automatik ausschalten" if self.controller.config.inverter_auto_start
-                else "230V-Automatik einschalten")
-
-    def _toggle_auto_start(self) -> None:
-        self.controller.config.inverter_auto_start = not self.controller.config.inverter_auto_start
-        self.controller.config.save()
-        if self._auto_start_button is not None:
-            self._auto_start_button.configure(text=self._auto_start_button_text())
 
     def _on_steps_change(self, value) -> None:
         self.controller.config.total_steps = int(value)
@@ -581,16 +536,6 @@ class BedGui:
             self._bind_correction(button, click_action, hold_action)
         return window
 
-    def _not_implemented_window(self) -> None:
-        self._toggle_window("not_implemented", self._build_not_implemented_window)
-
-    def _build_not_implemented_window(self):
-        window = ctk.CTkToplevel(self.app)
-        window.title("Not Implemented!")
-        window.geometry("260x110")
-        ctk.CTkLabel(window, text="not implemented!").pack(padx=20, pady=25)
-        return window
-
     def _location_window(self) -> None:
         self._toggle_window("location", self._build_location_window)
 
@@ -618,196 +563,6 @@ class BedGui:
         self.controller.config.save()
         self._on_window_closed("location")
         self._apply_weather()
-
-    # --- memory game -------------------------------------------------------
-
-    def _game_window(self) -> None:
-        self._toggle_window("game", self._build_game_window)
-
-    def _build_game_window(self):
-        window = ctk.CTkToplevel(self.app)
-        window.title("Memory")
-        content = ctk.CTkFrame(window, fg_color="transparent")
-        content.pack(padx=ICON_TABLE_PAD, pady=ICON_TABLE_PAD)
-
-        self._game = MemoryGame()
-        self.game_status = ctk.CTkLabel(content, text="", font=ctk.CTkFont(size=16, weight="bold"))
-        self.game_status.grid(row=0, column=0, columnspan=GAME_COLUMNS, pady=(0, 8))
-
-        self._game_cards = []
-        for index in range(len(self._game.cards)):
-            canvas = icons.IconCanvas(content, size=GAME_CARD_SIZE, background=_panel_background())
-            canvas.grid(row=1 + index // GAME_COLUMNS, column=index % GAME_COLUMNS,
-                        padx=GAME_CARD_PAD, pady=GAME_CARD_PAD)
-            canvas.bind("<Button-1>", lambda _event, position=index: self._on_card(position))
-            self._game_cards.append(canvas)
-
-        rows = 1 + (len(self._game.cards) - 1) // GAME_COLUMNS
-        ctk.CTkButton(content, text="Neues Spiel", width=200, command=self._new_game).grid(
-            row=2 + rows, column=0, columnspan=GAME_COLUMNS, pady=(10, 0)
-        )
-        self._render_game()
-        return window
-
-    def _new_game(self) -> None:
-        if self._game is None:
-            return
-        self._game.deal()
-        self._render_game()
-
-    def _on_card(self, index: int) -> None:
-        if self._game is None:
-            return
-        outcome = self._game.reveal(index)
-        if outcome == IGNORED:
-            return
-        self._render_game()
-        if outcome == MISMATCH:
-            self.app.after(GAME_MISMATCH_DELAY_MS, self._resolve_cards)
-        elif self._game.won:
-            self._finish_game()
-
-    def _resolve_cards(self) -> None:
-        # the window may well be gone by the time this fires
-        if self._game is None or not self._game_cards:
-            return
-        self._game.resolve()
-        self._render_game()
-
-    def _finish_game(self) -> None:
-        best = False
-        if self.history is not None:
-            best = self.history.record_memory_result(self._game.moves)
-        suffix = "  Neuer Rekord!" if best else ""
-        self.game_status.configure(text=f"Geschafft in {self._game.moves} Zügen!{suffix}")
-
-    def _render_game(self) -> None:
-        if self._game is None or not self._game_cards:
-            return
-        for canvas, card in zip(self._game_cards, self._game.cards):
-            self._draw_card(canvas, card)
-        self.game_status.configure(text=self._game_status_text())
-
-    def _game_status_text(self) -> str:
-        best = self.history.best_memory_moves if self.history is not None else None
-        line = f"Züge: {self._game.moves}   Paare: {self._game.pairs_found}/{len(self._game.icons)}"
-        return line if best is None else f"{line}   Rekord: {best}"
-
-    @staticmethod
-    def _draw_card(canvas, card) -> None:
-        canvas.delete("all")
-        if card.face_up or card.matched:
-            if card.matched:
-                canvas.create_rectangle(0, 0, GAME_CARD_SIZE, GAME_CARD_SIZE,
-                                        fill=GAME_CARD_MATCHED_COLOR, outline="")
-            icons.draw_icon(canvas, card.icon, GAME_CARD_SIZE)
-            return
-        canvas.create_rectangle(2, 2, GAME_CARD_SIZE - 2, GAME_CARD_SIZE - 2,
-                                fill=GAME_CARD_BACK_COLOR, outline="")
-        canvas.create_text(GAME_CARD_SIZE / 2, GAME_CARD_SIZE / 2, text="?",
-                           fill="#dce4ee", font=("Roboto", round(GAME_CARD_SIZE * 0.4)))
-
-    # --- jump game ---------------------------------------------------------
-
-    def _jump_window(self) -> None:
-        self._toggle_window("jump", self._build_jump_window)
-
-    def _build_jump_window(self):
-        window = ctk.CTkToplevel(self.app)
-        window.title("Hüpfen")
-        content = ctk.CTkFrame(window, fg_color="transparent")
-        content.pack(padx=ICON_TABLE_PAD, pady=ICON_TABLE_PAD)
-
-        self._jump = jump.JumpGame()
-        self.jump_status = ctk.CTkLabel(content, text="", font=ctk.CTkFont(size=16, weight="bold"))
-        self.jump_status.pack(pady=(0, 8))
-
-        self._jump_canvas = tkinter.Canvas(content, width=int(jump.WORLD_WIDTH),
-                                           height=JUMP_CANVAS_HEIGHT, bg=JUMP_SKY_COLOR,
-                                           highlightthickness=0, borderwidth=0)
-        self._jump_canvas.pack()
-        self._jump_canvas.bind("<Button-1>", lambda _event: self._jump_tap())
-
-        ctk.CTkButton(content, text="Neues Spiel", width=200,
-                      command=self._new_jump_game).pack(pady=(10, 0))
-        self._render_jump()
-        self._start_jump_loop()
-        return window
-
-    def _new_jump_game(self) -> None:
-        if self._jump is None:
-            return
-        self._jump.reset()
-        self._jump_record = False
-        self._render_jump()
-
-    def _jump_tap(self) -> None:
-        if self._jump is None:
-            return
-        if self._jump.can_restart:
-            self._jump_record = False
-        self._jump.jump()
-        self._render_jump()
-
-    def _start_jump_loop(self) -> None:
-        self._jump_tick_at = time.monotonic()
-        self._jump_timer = self.app.after(JUMP_TICK_MS, self._jump_loop)
-
-    def _stop_jump_loop(self) -> None:
-        if self._jump_timer is not None:
-            self.app.after_cancel(self._jump_timer)
-            self._jump_timer = None
-
-    def _jump_loop(self) -> None:
-        if self._jump is None or self._jump_canvas is None:
-            return
-        now = time.monotonic()
-        was_running = self._jump.state == jump.RUNNING
-        self._jump.tick(now - self._jump_tick_at)
-        self._jump_tick_at = now
-        if was_running and self._jump.state == jump.OVER:
-            self._finish_jump()
-        self._render_jump()
-        self._jump_timer = self.app.after(JUMP_TICK_MS, self._jump_loop)
-
-    def _render_jump(self) -> None:
-        if self._jump is None or self._jump_canvas is None:
-            return
-        canvas = self._jump_canvas
-        canvas.delete("all")
-        canvas.create_line(0, JUMP_GROUND_Y, jump.WORLD_WIDTH, JUMP_GROUND_Y,
-                           fill=JUMP_GROUND_COLOR, width=2)
-        for obstacle in self._jump.obstacles:
-            canvas.create_rectangle(obstacle.x, JUMP_GROUND_Y - obstacle.height,
-                                    obstacle.right, JUMP_GROUND_Y,
-                                    fill=JUMP_OBSTACLE_COLOR, outline="")
-        foot = JUMP_GROUND_Y - self._jump.height
-        canvas.create_rectangle(jump.PLAYER_X, foot - jump.PLAYER_SIZE,
-                                jump.PLAYER_X + jump.PLAYER_SIZE, foot,
-                                fill=JUMP_PLAYER_COLOR, outline="")
-        hint = self._jump_hint()
-        if hint:
-            canvas.create_text(jump.WORLD_WIDTH / 2, JUMP_GROUND_Y / 2, text=hint,
-                               fill=JUMP_TEXT_COLOR, font=("Roboto", 20, "bold"))
-        self.jump_status.configure(text=self._jump_status_text())
-
-    def _finish_jump(self) -> None:
-        if self.history is not None:
-            self._jump_record = self.history.record_jump_result(self._jump.score)
-
-    def _jump_hint(self) -> str:
-        if self._jump.state == jump.READY:
-            return "Tippen zum Starten"
-        if self._jump.state == jump.OVER:
-            return "Vorbei - nochmal tippen" if self._jump.can_restart else "Vorbei!"
-        return ""
-
-    def _jump_status_text(self) -> str:
-        best = self.history.best_jump_score if self.history is not None else 0
-        line = f"Punkte: {self._jump.score}   Tempo: {round(self._jump.speed)}"
-        if best:
-            line = f"{line}   Rekord: {best}"
-        return f"{line}   Neuer Rekord!" if self._jump_record else line
 
     def _history_window(self) -> None:
         self._toggle_window("history", self._build_history_window)

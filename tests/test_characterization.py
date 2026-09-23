@@ -528,15 +528,10 @@ class TestConfigInverter:
     def test_the_delay_defaults_to_ten_seconds(self, tmp_path):
         assert Config.load(str(tmp_path / "missing.json")).inverter_startup_seconds == 10.0
 
-    def test_the_automatic_defaults_to_on(self, tmp_path):
-        assert Config.load(str(tmp_path / "missing.json")).inverter_auto_start is True
-
-    def test_both_survive_a_save_and_load(self, tmp_path):
+    def test_the_delay_survives_a_save_and_load(self, tmp_path):
         path = str(tmp_path / "config.json")
-        Config(inverter_startup_seconds=4.0, inverter_auto_start=False, path=path).save()
-        loaded = Config.load(path)
-        assert loaded.inverter_startup_seconds == 4.0
-        assert loaded.inverter_auto_start is False
+        Config(inverter_startup_seconds=4.0, path=path).save()
+        assert Config.load(path).inverter_startup_seconds == 4.0
 
     def test_zero_is_allowed(self, tmp_path):
         path = str(tmp_path / "config.json")
@@ -559,4 +554,3 @@ class TestConfigInverter:
         config = Config.load(str(path))
         assert config.total_steps == 29500
         assert config.inverter_startup_seconds == 10.0
-        assert config.inverter_auto_start is True

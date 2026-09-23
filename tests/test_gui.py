@@ -9,13 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from bedliftcontrol import gui as gui_module
-from bedliftcontrol.gui import (
-    GAME_MISMATCH_DELAY_MS,
-    MIN_BAR_FRACTION,
-    STUB_TRIM_PX,
-    BedGui,
-    MoveContext,
-)
+from bedliftcontrol.gui import MIN_BAR_FRACTION, STUB_TRIM_PX, BedGui, MoveContext
 
 WIDGETS = [
     "CTk",
@@ -84,7 +78,6 @@ def controller():
     fake.config.speed_pps = 800.0
     fake.config.kiosk = False
     fake.config.inverter_startup_seconds = 10.0
-    fake.config.inverter_auto_start = True
     return fake
 
 
@@ -641,36 +634,33 @@ class TestDescentPercent:
         assert shown == ["100%", "60%", "20%", "0%"]
 
 
-class TestDescentPrompt:
-    """The 'switch the motors on and release the ropes' note only fits a bed parked up."""
+class TestNoPromptBeforeMoving:
+    """A tap on an arrow moves the bed. Mains is handled by the app, so there is
+    nothing left to confirm before it does."""
 
     @pytest.fixture
     def box(self, monkeypatch):
-        from bedliftcontrol import gui as module
-
         fake = MagicMock()
-        monkeypatch.setattr(module, "messagebox", fake)
+        monkeypatch.setattr(gui_module, "messagebox", fake)
         return fake
 
-    def test_shown_when_starting_from_the_top(self, gui, controller, box):
+    def test_lowering_from_the_top_asks_nothing(self, gui, controller, box):
         controller.at_top = True
         gui._on_down()
-        box.showinfo.assert_called_once()
+        assert not box.showinfo.called and not box.askokcancel.called
+        controller.run_async.assert_called_once_with(controller.move_down)
 
-    def test_not_shown_when_carrying_on_after_a_stop(self, gui, controller, box):
+    def test_raising_from_the_bottom_asks_nothing(self, gui, controller, box):
+        controller.at_bottom = True
+        gui._on_up()
+        assert not box.showinfo.called and not box.askokcancel.called
+        controller.run_async.assert_called_once_with(controller.move_up)
+
+    def test_carrying_on_after_a_stop_asks_nothing(self, gui, controller, box):
         controller.at_top = False
         controller.at_bottom = False
         gui._on_down()
-        assert not box.showinfo.called
-
-    def test_the_move_still_starts_without_the_prompt(self, gui, controller, box):
-        controller.at_top = False
-        gui._on_down()
-        controller.run_async.assert_called_once_with(controller.move_down)
-
-    def test_going_up_never_prompts(self, gui, controller, box):
-        gui._on_up()
-        assert not box.showinfo.called
+        assert not box.showinfo.called and not box.askokcancel.called
 
 
 class TestStopButtonLabel:
@@ -696,7 +686,7 @@ class TestStopButtonLabel:
 
 
 class TestEndStopPrompts:
-    """The prompts that bracket a full travel: motors on before, motors off after."""
+    """What the bed says when it arrives at an end stop."""
 
     @pytest.fixture
     def box(self, monkeypatch):
@@ -706,64 +696,31 @@ class TestEndStopPrompts:
         monkeypatch.setattr(module, "messagebox", fake)
         return fake
 
-    # --- starting up from the very bottom ---------------------------------
-
-    def test_asks_before_leaving_the_bottom(self, gui, controller, box):
-        controller.at_bottom = True
-        box.askokcancel.return_value = True
-        gui._on_up()
-        box.askokcancel.assert_called_once_with("Bett hochfahren", "Motoren einschalten.")
-
-    def test_confirming_starts_the_move(self, gui, controller, box):
-        controller.at_bottom = True
-        box.askokcancel.return_value = True
-        gui._on_up()
-        controller.run_async.assert_called_once_with(controller.move_up)
-
-    def test_dismissing_the_dialog_changes_nothing(self, gui, controller, box):
-        """Closing the window with X reports False, and then nothing may move."""
-        controller.at_bottom = True
-        box.askokcancel.return_value = False
-        gui._on_up()
-        assert not controller.run_async.called
-        assert gui._move_context is None
-        assert not gui.stop_button.place.called, "no stop button without a movement"
-
-    def test_no_question_when_carrying_on_after_a_stop(self, gui, controller, box):
-        controller.at_bottom = False
-        controller.at_top = False
-        gui._on_up()
-        assert not box.askokcancel.called
-        controller.run_async.assert_called_once_with(controller.move_up)
-
-    # --- arriving at the very bottom --------------------------------------
-
-    def test_says_good_night_at_the_bottom(self, gui, controller, box):
+    def test_arriving_at_the_bottom_says_nothing(self, gui, controller, box):
+        """Mains switches itself off down there, so there is nothing left to instruct."""
         controller.is_moving = False
         controller.at_bottom = True
-        gui._move_context = MoveContext.DOWN
-        gui._poll_movement()
-        box.showinfo.assert_called_once_with("Bett unten", "Motoren ausschalten. Gute Nacht!")
-
-    def test_no_good_night_after_a_stop_in_between(self, gui, controller, box):
-        controller.is_moving = False
-        controller.at_bottom = False
-        controller.at_top = False
         gui._move_context = MoveContext.DOWN
         gui._poll_movement()
         assert not box.showinfo.called
 
-    def test_no_good_night_when_arriving_at_the_top(self, gui, controller, box):
+    def test_arriving_at_the_top_asks_for_the_ropes(self, gui, controller, box):
         controller.is_moving = False
         controller.at_top = True
         controller.at_bottom = False
         gui._move_context = MoveContext.UP
         gui._poll_movement()
-        box.showinfo.assert_called_once_with(
-            "Bett oben", "Sicherungsseile anbringen und Motoren ausschalten!"
-        )
+        box.showinfo.assert_called_once_with("Bett sichern", "Sicherungsseile anbringen!")
 
-    def test_the_two_arrival_prompts_never_both_fire(self, gui, controller, box):
+    def test_no_prompt_after_a_stop_in_between(self, gui, controller, box):
+        controller.is_moving = False
+        controller.at_bottom = False
+        controller.at_top = False
+        gui._move_context = MoveContext.UP
+        gui._poll_movement()
+        assert not box.showinfo.called
+
+    def test_the_two_arrival_branches_never_both_fire(self, gui, controller, box):
         """at_top and at_bottom are mutually exclusive, but the branch must be too."""
         controller.is_moving = False
         controller.at_top = True
@@ -1099,295 +1056,6 @@ class TestHistoryWindow:
         assert visible + 2 * ICON_TABLE_PAD + 110 + 30 <= 480
 
 
-class TestGameWindow:
-    """Tapping is the only input the panel has, so every rule must work by tap alone."""
-
-    @pytest.fixture
-    def playing(self, controller, weather):
-        from bedliftcontrol.game import MemoryGame
-
-        tracker = MagicMock()
-        tracker.best_memory_moves = None
-        built = BedGui(controller, weather, history=tracker)
-        built._game_window()
-        built._game = MemoryGame(shuffle=lambda cards: None)
-        built._render_game()
-        return built, tracker
-
-    def test_the_settings_window_offers_it(self, gui):
-        import customtkinter
-
-        customtkinter.CTkButton.reset_mock()
-        gui._settings_window()
-        texts = [c.kwargs.get("text") for c in customtkinter.CTkButton.call_args_list]
-        assert "Memory spielen" in texts
-
-    def test_opens_and_closes(self, gui):
-        gui._game_window()
-        assert "game" in gui._open_windows
-        gui._game_window()
-        assert "game" not in gui._open_windows
-
-    def test_one_canvas_per_card(self, playing):
-        built, _ = playing
-        assert len(built._game_cards) == len(built._game.cards)
-
-    def test_every_card_is_wired_to_its_own_index(self, controller, weather, monkeypatch):
-        """The classic loop trap: every lambda closing over the last index instead of
-        its own, so all sixteen cards would turn the same one over."""
-        monkeypatch.setattr(gui_module.icons, "IconCanvas",
-                            lambda master, size, background: MagicMock())
-        built = BedGui(controller, weather)
-        built._game_window()
-        for index, canvas in enumerate(built._game_cards):
-            handlers = {c.args[0]: c.args[1] for c in canvas.bind.call_args_list}
-            assert "<Button-1>" in handlers
-            built._game.deal()
-            handlers["<Button-1>"](None)
-            assert built._game.cards[index].face_up is True
-
-    def test_tapping_turns_a_card_over(self, playing):
-        built, _ = playing
-        built._on_card(0)
-        assert built._game.cards[0].face_up is True
-
-    def test_a_mismatch_schedules_the_turn_back(self, playing):
-        built, _ = playing
-        built.app.after.reset_mock()
-        built._on_card(0)
-        built._on_card(2)
-        delays = [c.args[0] for c in built.app.after.call_args_list]
-        assert GAME_MISMATCH_DELAY_MS in delays
-
-    def test_the_scheduled_turn_back_flips_them(self, playing):
-        built, _ = playing
-        built._on_card(0)
-        built._on_card(2)
-        built._resolve_cards()
-        assert not any(card.face_up for card in built._game.cards)
-
-    def test_a_match_schedules_nothing(self, playing):
-        built, _ = playing
-        built.app.after.reset_mock()
-        built._on_card(0)
-        built._on_card(1)
-        delays = [c.args[0] for c in built.app.after.call_args_list]
-        assert GAME_MISMATCH_DELAY_MS not in delays
-
-    def test_closing_the_window_stops_a_pending_turn_back(self, playing):
-        """The scheduled callback fires after the widgets are gone."""
-        built, _ = playing
-        built._on_card(0)
-        built._on_card(2)
-        built._on_window_closed("game")
-        built._resolve_cards()  # must not raise
-        assert built._game is None
-
-    def test_tapping_after_the_window_closed_does_nothing(self, playing):
-        built, _ = playing
-        built._on_window_closed("game")
-        built._on_card(0)  # must not raise
-
-    def test_winning_reports_the_move_count(self, playing):
-        built, tracker = playing
-        tracker.record_memory_result.return_value = False
-        for pair in range(len(built._game.icons)):
-            built._on_card(2 * pair)
-            built._on_card(2 * pair + 1)
-        assert built._game.won is True
-        built.game_status.configure.assert_any_call(
-            text=f"Geschafft in {built._game.moves} Z\u00fcgen!"
-        )
-
-    def test_winning_offers_the_result_to_the_history(self, playing):
-        built, tracker = playing
-        tracker.record_memory_result.return_value = False
-        for pair in range(len(built._game.icons)):
-            built._on_card(2 * pair)
-            built._on_card(2 * pair + 1)
-        tracker.record_memory_result.assert_called_once_with(built._game.moves)
-
-    def test_a_new_best_is_announced(self, playing):
-        built, tracker = playing
-        tracker.record_memory_result.return_value = True
-        for pair in range(len(built._game.icons)):
-            built._on_card(2 * pair)
-            built._on_card(2 * pair + 1)
-        texts = [c.kwargs.get("text") for c in built.game_status.configure.call_args_list]
-        assert any("Neuer Rekord!" in (text or "") for text in texts)
-
-    def test_works_without_a_history(self, gui):
-        gui.history = None
-        gui._game_window()
-        for pair in range(len(gui._game.icons)):
-            gui._on_card(2 * pair)
-            gui._on_card(2 * pair + 1)  # must not raise
-
-    def test_a_new_game_clears_the_board(self, playing):
-        built, _ = playing
-        built._on_card(0)
-        built._on_card(1)
-        built._new_game()
-        assert not any(card.face_up or card.matched for card in built._game.cards)
-
-    def test_the_status_line_shows_progress(self, playing):
-        built, _ = playing
-        built._on_card(0)
-        built._on_card(1)
-        texts = [c.kwargs.get("text") or "" for c in built.game_status.configure.call_args_list]
-        assert any(text.startswith("Z\u00fcge: 1") and "Paare: 1/" in text for text in texts)
-
-    def test_the_record_is_shown_when_there_is_one(self, controller, weather):
-        tracker = MagicMock()
-        tracker.best_memory_moves = 11
-        built = BedGui(controller, weather, history=tracker)
-        built._game_window()
-        texts = [c.kwargs.get("text") or "" for c in built.game_status.configure.call_args_list]
-        assert any("Rekord: 11" in text for text in texts)
-
-
-class TestJumpWindow:
-    """One tap is the whole game, and it runs on a timer, so both must survive a
-    window that gets closed mid-run."""
-
-    @pytest.fixture
-    def canvas(self, monkeypatch):
-        """A mock instead of the real Tk canvas, so the tap binding can be inspected."""
-        made = []
-
-        def build(*_args, **_kwargs):
-            made.append(MagicMock())
-            return made[-1]
-
-        monkeypatch.setattr(gui_module.tkinter, "Canvas", build)
-        return made
-
-    @pytest.fixture
-    def running(self, controller, weather, canvas):
-        tracker = MagicMock()
-        tracker.best_jump_score = 0
-        built = BedGui(controller, weather, history=tracker)
-        built._jump_window()
-        return built, tracker
-
-    @staticmethod
-    def tap(built, canvas):
-        handlers = {c.args[0]: c.args[1] for c in canvas[0].bind.call_args_list}
-        handlers["<Button-1>"](None)
-
-    def test_the_settings_window_offers_it(self, gui):
-        import customtkinter
-
-        customtkinter.CTkButton.reset_mock()
-        gui._settings_window()
-        texts = [c.kwargs.get("text") for c in customtkinter.CTkButton.call_args_list]
-        assert "Hüpfen spielen" in texts
-
-    def test_opens_and_closes(self, gui):
-        gui._jump_window()
-        assert "jump" in gui._open_windows
-        gui._jump_window()
-        assert "jump" not in gui._open_windows
-
-    def test_it_waits_for_the_first_tap(self, running):
-        built, _ = running
-        assert built._jump.state == gui_module.jump.READY
-
-    def test_the_hint_invites_the_first_tap(self, running):
-        built, _ = running
-        assert built._jump_hint() == "Tippen zum Starten"
-
-    def test_tapping_the_canvas_starts_the_run(self, running, canvas):
-        built, _ = running
-        self.tap(built, canvas)
-        assert built._jump.state == gui_module.jump.RUNNING
-
-    def test_the_loop_keeps_itself_going(self, running):
-        built, _ = running
-        built.app.after.reset_mock()
-        built._jump_loop()
-        delays = [c.args[0] for c in built.app.after.call_args_list]
-        assert gui_module.JUMP_TICK_MS in delays
-
-    def test_closing_the_window_cancels_the_tick(self, running):
-        built, _ = running
-        timer = built._jump_timer
-        built._on_window_closed("jump")
-        built.app.after_cancel.assert_called_with(timer)
-        assert built._jump is None
-
-    def test_the_loop_stops_once_the_window_is_gone(self, running):
-        """The pending tick fires after the canvas was destroyed."""
-        built, _ = running
-        built._on_window_closed("jump")
-        built.app.after.reset_mock()
-        built._jump_loop()  # must not raise
-        assert built.app.after.call_count == 0
-
-    def test_tapping_after_the_window_closed_does_nothing(self, running):
-        built, _ = running
-        built._on_window_closed("jump")
-        built._jump_tap()  # must not raise
-
-    def test_a_crash_is_reported_to_the_history(self, running):
-        built, tracker = running
-        tracker.record_jump_result.return_value = False
-        self.crash(built)
-        assert built._jump.state == gui_module.jump.OVER
-        tracker.record_jump_result.assert_called_once_with(built._jump.score)
-
-    def test_a_crash_is_reported_only_once(self, running):
-        built, tracker = running
-        tracker.record_jump_result.return_value = False
-        self.crash(built)
-        built._jump_loop()
-        assert tracker.record_jump_result.call_count == 1
-
-    def test_a_new_record_is_announced(self, running):
-        built, tracker = running
-        tracker.record_jump_result.return_value = True
-        self.crash(built)
-        assert "Neuer Rekord!" in built._jump_status_text()
-
-    def test_the_announcement_goes_away_with_the_next_game(self, running):
-        built, tracker = running
-        tracker.record_jump_result.return_value = True
-        self.crash(built)
-        built._new_jump_game()
-        assert "Neuer Rekord!" not in built._jump_status_text()
-
-    def test_the_record_is_shown_when_there_is_one(self, controller, weather, canvas):
-        tracker = MagicMock()
-        tracker.best_jump_score = 42
-        built = BedGui(controller, weather, history=tracker)
-        built._jump_window()
-        assert "Rekord: 42" in built._jump_status_text()
-
-    def test_no_record_is_shown_before_the_first_game(self, running):
-        built, _ = running
-        assert "Rekord" not in built._jump_status_text()
-
-    def test_works_without_a_history(self, gui, canvas):
-        gui._jump_window()
-        self.crash(gui)  # must not raise
-        assert "Rekord" not in gui._jump_status_text()
-
-    def test_a_new_game_clears_the_track(self, running):
-        built, _ = running
-        self.crash(built)
-        built._new_jump_game()
-        assert built._jump.state == gui_module.jump.READY
-        assert built._jump.obstacles == []
-
-    @staticmethod
-    def crash(built):
-        """Put an obstacle where the player stands and let one tick find it."""
-        built._jump.state = gui_module.jump.RUNNING
-        built._jump.obstacles = [gui_module.jump.Obstacle(
-            x=gui_module.jump.PLAYER_X, width=20.0, height=30.0)]
-        built._jump_loop()
-
-
 class FakeInverter:
     """Stateful stand-in: the GUI has to see its own switching reflected."""
 
@@ -1583,6 +1251,7 @@ class TestInverterSettings:
 
         return [c.kwargs.get("text") for c in customtkinter.CTkButton.call_args_list]
 
+
     def test_the_delay_slider_spans_zero_to_fifteen(self, settings):
         import customtkinter
 
@@ -1624,57 +1293,138 @@ class TestInverterSettings:
         assert controller.config.inverter_startup_seconds == 0.0
         assert inverter.startup_seconds == 0.0
 
-    def test_the_switch_offers_to_turn_the_automatic_off(self, settings):
-        assert "230V-Automatik ausschalten" in self.button_texts()
+    def test_no_switch_for_the_automatic(self):
+        """It was removed: without it a movement has no power, which is not an option
+        worth offering."""
+        assert not any("Automatik" in (text or "") for text in self.button_texts())
+class TestPowerAfterMoving:
+    """Mains is switched off again once the bed is parked at an end stop."""
 
-    def test_the_switch_offers_to_turn_it_on_again(self, controller, weather):
-        controller.config.inverter_auto_start = False
-        built = BedGui(controller, weather, inverter=FakeInverter())
-        built._settings_window()
-        assert "230V-Automatik einschalten" in self.button_texts()
-
-    def test_tapping_the_switch_turns_the_automatic_off(self, settings, controller):
-        built, _ = settings
-        built._toggle_auto_start()
-        assert controller.config.inverter_auto_start is False
-        controller.config.save.assert_called()
-
-    def test_tapping_the_switch_relabels_it(self, settings):
-        built, _ = settings
-        built._toggle_auto_start()
-        built._auto_start_button.configure.assert_called_with(text="230V-Automatik einschalten")
-
-    def test_tapping_twice_is_back_where_it_started(self, settings, controller):
-        built, _ = settings
-        built._toggle_auto_start()
-        built._toggle_auto_start()
-        assert controller.config.inverter_auto_start is True
-
-
-class TestAutomaticSwitchedOff:
     @pytest.fixture
-    def manual(self, controller, weather):
-        controller.config.inverter_auto_start = False
-        inverter = FakeInverter()
+    def box(self, monkeypatch):
+        fake = MagicMock()
+        monkeypatch.setattr(gui_module, "messagebox", fake)
+        return fake
+
+    @pytest.fixture
+    def running(self, controller, weather):
+        inverter = FakeInverter(on=True, ready=True)
+        controller.is_moving = False
         return BedGui(controller, weather, inverter=inverter), inverter
 
-    def test_the_inverter_is_left_alone(self, manual, controller):
-        built, inverter = manual
-        built._start_move(MoveContext.UP, controller.move_up)
-        assert inverter.turn_on_calls == 0
+    @staticmethod
+    def arrive(built, controller, context, at_top=False, at_bottom=False):
+        controller.is_moving = False
+        controller.at_top = at_top
+        controller.at_bottom = at_bottom
+        built._move_context = context
+        built._poll_movement()
+
+    def test_arriving_at_the_top_switches_it_off(self, running, controller, box):
+        built, inverter = running
+        self.arrive(built, controller, MoveContext.UP, at_top=True)
         assert inverter.on is False
 
-    def test_the_move_starts_without_waiting(self, manual, controller):
-        built, _ = manual
-        built._start_move(MoveContext.UP, controller.move_up)
-        controller.run_async.assert_called_once_with(controller.move_up)
+    def test_arriving_at_the_bottom_switches_it_off(self, running, controller, box):
+        built, inverter = running
+        self.arrive(built, controller, MoveContext.DOWN, at_bottom=True)
+        assert inverter.on is False
 
-    def test_no_countdown_is_shown(self, manual, controller):
-        built, _ = manual
-        built._start_move(MoveContext.UP, controller.move_up)
-        assert built.stop_button.configure.call_args.kwargs["text"] == "STOP"
+    def test_the_rope_prompt_comes_while_mains_is_still_on(self, running, controller, box):
+        """The motors hold the bed until the ropes are on; only the OK cuts the power."""
+        built, inverter = running
+        seen = []
+        box.showinfo.side_effect = lambda *args, **kwargs: seen.append(inverter.on)
+        self.arrive(built, controller, MoveContext.UP, at_top=True)
+        assert seen == [True]
+        assert inverter.on is False
 
-    def test_the_power_button_still_works_by_hand(self, manual):
-        built, inverter = manual
-        built._toggle_inverter()
+    def test_the_button_follows(self, running, controller, box):
+        built, inverter = running
+        self.arrive(built, controller, MoveContext.UP, at_top=True)
+        assert built.power_button.configure.call_args.kwargs["text"] == "230V aus"
+
+    def test_a_stop_in_between_leaves_it_running(self, running, controller, box):
+        built, inverter = running
+        self.arrive(built, controller, MoveContext.DOWN)
         assert inverter.on is True
+
+    def test_the_whole_round_trip(self, controller, weather, box):
+        """Down a bit, STOP, then all the way up: red throughout, off at the top."""
+        inverter = FakeInverter()
+        built = BedGui(controller, weather, inverter=inverter)
+
+        controller.at_top = True
+        controller.at_bottom = False
+        built._start_move(MoveContext.DOWN, controller.move_down)
+        inverter.finish_starting()
+        built._wait_for_inverter()
+        assert inverter.on is True
+        assert built.power_button.configure.call_args.kwargs["text"] == "230V ein"
+
+        self.arrive(built, controller, MoveContext.DOWN)  # stopped half way
+        assert inverter.on is True, "still hanging, the motors still need power"
+
+        built._start_move(MoveContext.UP, controller.move_up)
+        built._wait_for_inverter()
+        self.arrive(built, controller, MoveContext.UP, at_top=True)
+        assert inverter.on is False
+        assert built.power_button.configure.call_args.kwargs["text"] == "230V aus"
+
+    def test_an_inverter_that_is_already_off_is_left_alone(self, controller, weather, box):
+        built = BedGui(controller, weather, inverter=FakeInverter())
+        built.power_button.configure.reset_mock()
+        self.arrive(built, controller, MoveContext.DOWN, at_bottom=True)
+        assert built.power_button.configure.call_args.kwargs["text"] == "230V aus"
+
+
+class TestCountdownText:
+    """The start-up wait is dead time at the bed, so the button uses it for the one
+    thing that has to happen before the bed can be lowered."""
+
+    @pytest.fixture
+    def waiting(self, controller, weather):
+        inverter = FakeInverter()
+        built = BedGui(controller, weather, inverter=inverter)
+        return built, inverter
+
+    @staticmethod
+    def countdown(built):
+        return built.stop_button.configure.call_args.kwargs["text"]
+
+    def test_lowering_from_the_top_asks_for_the_ropes(self, waiting, controller):
+        built, _ = waiting
+        controller.at_top = True
+        controller.at_bottom = False
+        built._start_move(MoveContext.DOWN, controller.move_down)
+        assert "Seile lösen!" in self.countdown(built)
+        assert "230V" in self.countdown(built)
+
+    def test_raising_says_nothing_about_ropes(self, waiting, controller):
+        built, _ = waiting
+        controller.at_bottom = True
+        controller.at_top = False
+        built._start_move(MoveContext.UP, controller.move_up)
+        assert "Seile" not in self.countdown(built)
+
+    def test_carrying_on_after_a_stop_says_nothing_about_ropes(self, waiting, controller):
+        """Half way down the ropes are long off."""
+        built, _ = waiting
+        controller.at_top = False
+        controller.at_bottom = False
+        built._start_move(MoveContext.DOWN, controller.move_down)
+        assert "Seile" not in self.countdown(built)
+
+    def test_the_hint_is_gone_once_it_moves(self, waiting, controller):
+        built, inverter = waiting
+        controller.at_top = True
+        built._start_move(MoveContext.DOWN, controller.move_down)
+        inverter.finish_starting()
+        built._wait_for_inverter()
+        assert self.countdown(built) == "STOP"
+
+    def test_it_counts_down(self, waiting, controller):
+        built, _ = waiting
+        controller.at_top = True
+        built._start_move(MoveContext.DOWN, controller.move_down)
+        assert "8s" in self.countdown(built), "7.2s rounds up"

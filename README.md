@@ -34,12 +34,10 @@ BedLiftControl/
 │       ├── clock.py         # Date and time formatting (German, locale independent)
 │       ├── config.py        # Config dataclass, load/save JSON
 │       ├── controller.py    # BedController: motion + GPIO logic (no GUI)
-│       ├── game.py          # Memory game rules (no Tk)
 │       ├── gui.py           # BedGui: CustomTkinter user interface
 │       ├── history.py       # Night counter and location history
 │       ├── icons.py         # Canvas-drawn weather icons
 │       ├── inverter.py      # 230V inverter, switched over its remote contact
-│       ├── jump.py          # Jump game physics (no Tk)
 │       ├── main.py          # Entry point
 │       ├── timesync.py      # Keeps the shown clock right when the Pi's is not
 │       └── weather.py       # Location, forecast and the WMO code table
@@ -153,7 +151,6 @@ All settings live in a single file, `data/config.json`:
 | `kiosk`          | Fullscreen instead of a window                           |
 | `weather_location` | Selected weather location, `phone` follows the public IP |
 | `inverter_startup_seconds` | How long a movement waits after switching the inverter on (0-15) |
-| `inverter_auto_start` | Whether a movement switches the inverter on by itself |
 
 The file is written automatically when settings change, when the bed is moved and
 when a movement is stopped.
@@ -168,16 +165,20 @@ The motors run off a Victron inverter whose remote terminal is a potential-free 
 closed means on. A relay on GPIO 17 sits across that contact, so the app can switch mains
 power the same way a wall switch would.
 
-The "230V" button in the bottom bar switches it by hand and shows the state. Starting a
-bed movement switches it on by itself and waits before the motors turn — the inverter's
-output is not stable the instant the contact closes. The wait is shown as a countdown on
-the STOP button, and STOP during the countdown drops the movement while leaving the
-inverter running.
+The "230V" button in the bottom bar switches it by hand and shows the state, turning
+red while mains is live. Starting a bed movement switches it on by itself and waits
+before the motors turn — the inverter's output is not stable the instant the contact
+closes. The wait is shown as a countdown on the STOP button, and STOP during the
+countdown drops the movement while leaving the inverter running.
 
-Both halves of that are settings: **230V Anlauf** sets the wait anywhere from 0 to 15
-seconds, and **230V-Automatik** turns the automatic switching off altogether, leaving the
-inverter entirely to the button. With the automatic off nothing is switched on and
-nothing is waited for — a movement then runs on whatever power is already there.
+A movement that reaches an end stop switches it off again: at the bottom silently, at the
+top after the "Sicherungsseile anbringen!" prompt is acknowledged — the motors hold the
+bed while the ropes go on. A movement stopped half way leaves it running, because the bed
+is still hanging there and the rest of the travel needs the motors.
+
+The wait is the one setting: **230V Anlauf**, anywhere from 0 to 15 seconds. There is
+no switch to turn the automatic off - without it a movement has no power at all, which
+is not a mode worth offering.
 
 Two deliberate choices:
 
@@ -223,37 +224,10 @@ monochrome with gaps that differ between Windows and the Pi.
   a bed that was never lowered counts nothing.
 - **Standort-Historie** — the phone position with a timestamp, appended whenever it
   differs from the one before it. Capped at the newest 1000 entries.
-- **Memory-Rekord** — the fewest moves a game was ever won in, see below.
-- **Hüpf-Rekord** — the highest score ever jumped, see below.
 
 The file is separate from `config.json` on purpose: that one is tracked by git and the
 update procedure resets it, which would wipe the counter. `history.json` is gitignored
 and survives updates.
-
-## Memory
-
-⚙ → "Memory spielen" deals eight pairs of weather icons face down in a 4×4 grid. Tap
-two cards: a pair stays up, anything else turns back over after a moment. The status
-line counts moves and pairs, and the fewest moves a game was ever won in is kept in
-`data/history.json`.
-
-Tapping is the only input the panel offers, which is why it is memory and not something
-needing swipes or a keyboard. The card faces reuse the drawn weather icons, so the game
-brings no artwork of its own.
-
-## Hüpfen
-
-⚙ → "Hüpfen spielen" is an endless runner: tap the play area to jump over the blocks
-coming at you. It starts at a leisurely 150 units per second and picks up 6 more every
-second up to 480, so the warning you get shrinks from two and a half seconds to well
-under one. Points count distance, the highest score lands in `data/history.json`, and
-after a crash the game waits 0.8s before a tap restarts it — long enough to read the
-score.
-
-The gaps between the blocks are measured in seconds of travel rather than pixels. A jump
-lasts 0.67s at any speed, so a gap of at least 1.1s always leaves ground to land on: the
-game gets faster, never unfair. A frame longer than 50ms is counted as 50ms, so a stutter
-on the Pi slows the game down instead of teleporting the player into a block.
 
 ## Clock
 

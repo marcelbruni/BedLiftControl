@@ -151,7 +151,7 @@ Fernbedienung.
 ## Funktionstest
 
 1. App starten, Knopf **„230V aus"** in der unteren Leiste antippen.
-   Er wechselt auf **„230V ein"** und wird grün, das Relais klickt, der
+   Er wechselt auf **„230V ein"** und wird rot, das Relais klickt, der
    Wechselrichter läuft an.
 2. Nochmal antippen: **„230V aus"**, der Wechselrichter geht aus.
 3. Einen Pfeil antippen. Über beiden Pfeilen erscheint ein Countdown
@@ -161,6 +161,9 @@ Fernbedienung.
    unter ⚙ → **230V Anlauf** zwischen 0 und 15 Sekunden ein.
 4. Während der Fahrt ist der 230V-Knopf ausgegraut — mitten in der Fahrt die
    Motoren stromlos zu machen würde die gespeicherte Bettposition verfälschen.
+5. Bis zum Anschlag fahren lassen. Unten geht das 230V von selbst wieder aus,
+   oben erst, wenn du das Popup „Sicherungsseile anbringen!" mit OK bestätigt
+   hast. Der Knopf wird in beiden Fällen wieder grau.
 
 ---
 

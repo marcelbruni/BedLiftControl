@@ -4,5 +4,6 @@
   "bed_up": true,
   "kiosk": false,
   "position_steps": 28000,
-  "weather_location": "phone"
+  "weather_location": "phone",
+  "inverter_startup_seconds": 10.0
 }

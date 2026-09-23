@@ -21,7 +21,6 @@ DEFAULT_BED_UP = True
 DEFAULT_KIOSK = False
 DEFAULT_WEATHER_LOCATION = "phone"
 DEFAULT_INVERTER_STARTUP_SECONDS = 10.0
-DEFAULT_INVERTER_AUTO_START = True
 INVERTER_STARTUP_MIN = 0.0
 INVERTER_STARTUP_MAX = 15.0
 
@@ -34,7 +33,6 @@ class Config:
     kiosk: bool = DEFAULT_KIOSK
     weather_location: str = DEFAULT_WEATHER_LOCATION
     inverter_startup_seconds: float = DEFAULT_INVERTER_STARTUP_SECONDS
-    inverter_auto_start: bool = DEFAULT_INVERTER_AUTO_START
     # 0 = bed fully down, total_steps = fully up. Anything in between is a position
     # the user stopped at, from which the next move continues or reverses.
     position_steps: int = -1  # -1 means "derive from bed_up", see load() and _validate()
@@ -65,8 +63,6 @@ class Config:
                 weather_location=str(data.get("weather_location", DEFAULT_WEATHER_LOCATION)),
                 inverter_startup_seconds=float(
                     data.get("inverter_startup_seconds", DEFAULT_INVERTER_STARTUP_SECONDS)),
-                inverter_auto_start=bool(
-                    data.get("inverter_auto_start", DEFAULT_INVERTER_AUTO_START)),
                 path=str(path),
             )
         except (ValueError, KeyError, OSError) as error:
@@ -110,7 +106,6 @@ class Config:
                 "position_steps": self.position_steps,
                 "weather_location": self.weather_location,
                 "inverter_startup_seconds": self.inverter_startup_seconds,
-                "inverter_auto_start": self.inverter_auto_start,
             },
             indent=2,
         )

@@ -29,13 +29,11 @@ Die App merkt sich die Bettposition **in Schritten**, nicht nur als oben/unten:
 | `kiosk` | Vollbildmodus (siehe Schritt 13) |
 | `weather_location` | Ausgewählter Wetter-Ort, Standard `phone` (Handystandort) |
 | `inverter_startup_seconds` | Wartezeit nach dem Einschalten des Wechselrichters, 0–15 s |
-| `inverter_auto_start` | Ob eine Bettfahrt den Wechselrichter selbst einschaltet |
 
 > **`data/history.json` ist eine andere Datei** und steht bewusst nicht in git:
-> dort liegen der Übernachtungszähler, die Standort-Historie und die beiden
-> Spielrekorde (Memory, Hüpfen). Sie überlebt Updates, weil `git checkout` sie
-> nicht anfasst. Zähler und Standorte stehen unter ⚙ → „Historie", die Rekorde
-> im jeweiligen Spiel.
+> dort liegen der Übernachtungszähler und die Standort-Historie. Sie überlebt
+> Updates, weil `git checkout` sie nicht anfasst. Anzusehen unter
+> ⚙ → „Historie".
 
 Wenn das Relais für den Wechselrichter noch nicht verdrahtet ist: das steht in
 [WIRING.md](WIRING.md) und ist unabhängig von dieser Anleitung.
@@ -293,8 +291,8 @@ Wenn das Projekt bereits per git auf dem Pi liegt und am Entwicklungsrechner
 > (Handystandort). Wenn du den Kiosk-Modus, eigene Schrittzahlen oder deinen Ort
 > behalten willst, nimm die Variante mit `cp` weiter unten.
 >
-> Der Übernachtungszähler, die Standort-Historie und die Spielrekorde sind **nicht**
-> betroffen, die liegen in `data/history.json` ausserhalb von git.
+> Der Übernachtungszähler und die Standort-Historie sind **nicht** betroffen, die
+> liegen in `data/history.json` ausserhalb von git.
 
 ```bash
 cd ~/BedLiftControl

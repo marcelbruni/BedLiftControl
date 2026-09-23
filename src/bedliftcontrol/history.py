@@ -56,8 +56,6 @@ class History:
         self.path = path
         self._lock = threading.Lock()
         self.nights = 0
-        self.best_memory_moves = None
-        self.best_jump_score = 0
         self.locations: list = []
         self._lowered_since_last_night = False
         self._load()
@@ -70,9 +68,6 @@ class History:
             data = json.loads(file.read_text(encoding="utf-8"))
             self.nights = int(data.get("nights", 0))
             self._lowered_since_last_night = bool(data.get("lowered_since_last_night", False))
-            best = data.get("best_memory_moves")
-            self.best_memory_moves = int(best) if best is not None else None
-            self.best_jump_score = int(data.get("best_jump_score", 0))
             self.locations = [LocationVisit.from_dict(entry) for entry in data.get("locations", [])]
         except (ValueError, KeyError, TypeError, AttributeError, OSError) as error:
             logger.warning("Could not read history %s (%s)", self.path, error)
@@ -83,8 +78,6 @@ class History:
         payload = {
             "nights": self.nights,
             "lowered_since_last_night": self._lowered_since_last_night,
-            "best_memory_moves": self.best_memory_moves,
-            "best_jump_score": self.best_jump_score,
             "locations": [entry.to_dict() for entry in self.locations],
         }
         target = Path(self.path)
@@ -142,23 +135,3 @@ class History:
         if counted:
             logger.info("Night %s recorded", self.nights)
         return counted
-
-    def record_memory_result(self, moves: int) -> bool:
-        """Keep the fewest moves a game was ever won in. True when it is a new best."""
-        with self._lock:
-            if self.best_memory_moves is not None and moves >= self.best_memory_moves:
-                return False
-            self.best_memory_moves = moves
-        self._save()
-        logger.info("New memory best: %s moves", moves)
-        return True
-
-    def record_jump_result(self, score: int) -> bool:
-        """Keep the highest score ever reached. True when it is a new best."""
-        with self._lock:
-            if score <= self.best_jump_score:
-                return False
-            self.best_jump_score = score
-        self._save()
-        logger.info("New jump best: %s points", score)
-        return True
