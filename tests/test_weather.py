@@ -488,3 +488,33 @@ class TestLocationHistoryHook:
         monkeypatch.setattr(weather_module, "fetch_location", lambda: (46.7, 7.6, "Thun"))
         monkeypatch.setattr(weather_module, "fetch_weather_batch", _batch())
         WeatherService(path=str(tmp_path / "weather.json")).refresh_once()
+
+
+class TestWeekday:
+    """The current panel shows which day its reading belongs to, two letters."""
+
+    @staticmethod
+    def reading(fetched_at):
+        from bedliftcontrol.weather import Weather
+
+        return Weather("Thun", 21.0, "Klar", "sun", fetched_at)
+
+    def test_two_letters(self):
+        assert self.reading("2026-09-23T10:37").weekday == "Mi"
+
+    def test_it_follows_the_date(self):
+        assert self.reading("2026-09-24T10:37").weekday == "Do"
+
+    def test_it_is_the_day_of_the_reading_not_of_today(self):
+        """An old reading stays honest about which day it is showing."""
+        assert self.reading("2026-09-20T18:00").weekday == "So"
+
+    def test_a_broken_timestamp_yields_nothing(self):
+        assert self.reading("").weekday == ""
+        assert self.reading("kaputt").weekday == ""
+
+    def test_it_survives_the_cache_round_trip(self):
+        from bedliftcontrol.weather import Weather
+
+        original = self.reading("2026-09-23T10:37")
+        assert Weather.from_dict(original.to_dict()).weekday == "Mi"

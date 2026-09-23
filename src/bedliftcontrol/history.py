@@ -83,7 +83,8 @@ class History:
         target = Path(self.path)
         temp = Path(str(target) + ".tmp")
         try:
-            temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            with open(temp, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
             os.replace(temp, target)
         except OSError as error:
             logger.warning("Could not write history %s (%s)", self.path, error)

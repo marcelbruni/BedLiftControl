@@ -252,22 +252,28 @@ class TestAsyncMovement:
         release.set()
         controller.wait_for_move(timeout=1)
 
-    def test_on_complete_runs_after_action(self, controller):
-        order = []
-        controller.run_async(lambda: order.append("action"), on_complete=lambda: order.append("done"))
-        controller.wait_for_move(timeout=1)
-        assert order == ["action", "done"]
-
-    def test_exception_in_action_still_runs_on_complete(self, controller):
-        completed = threading.Event()
+    def test_an_exception_in_the_action_ends_the_move_quietly(self, controller):
+        """The worker thread is a boundary: a failing movement is logged, not raised
+        into a thread nobody is watching."""
 
         def boom():
             raise RuntimeError("motor jammed")
 
-        controller.run_async(boom, on_complete=completed.set)
+        assert controller.run_async(boom) is True
         controller.wait_for_move(timeout=1)
-        assert completed.is_set()
         assert controller.is_moving is False
+
+    def test_a_failed_move_does_not_block_the_next_one(self, controller):
+        ran = threading.Event()
+
+        def boom():
+            raise RuntimeError("motor jammed")
+
+        controller.run_async(boom)
+        controller.wait_for_move(timeout=1)
+        assert controller.run_async(ran.set) is True
+        controller.wait_for_move(timeout=1)
+        assert ran.is_set()
 
 
 class TestConfigKiosk:
@@ -554,3 +560,55 @@ class TestConfigInverter:
         config = Config.load(str(path))
         assert config.total_steps == 29500
         assert config.inverter_startup_seconds == 10.0
+
+
+class TestConfigRopeDelay:
+    def test_it_defaults_to_ten_seconds(self, tmp_path):
+        assert Config.load(str(tmp_path / "missing.json")).rope_delay_seconds == 10.0
+
+    def test_it_survives_a_save_and_load(self, tmp_path):
+        path = str(tmp_path / "config.json")
+        Config(rope_delay_seconds=6.0, path=path).save()
+        assert Config.load(path).rope_delay_seconds == 6.0
+
+    def test_zero_is_allowed(self, tmp_path):
+        path = str(tmp_path / "config.json")
+        Config(rope_delay_seconds=0.0, path=path).save()
+        assert Config.load(path).rope_delay_seconds == 0.0
+
+    def test_above_the_maximum_is_clamped(self, tmp_path):
+        assert Config(rope_delay_seconds=99.0,
+                      path=str(tmp_path / "c.json")).rope_delay_seconds == 20.0
+
+    def test_a_negative_value_is_clamped(self, tmp_path):
+        assert Config(rope_delay_seconds=-1.0,
+                      path=str(tmp_path / "c.json")).rope_delay_seconds == 0.0
+
+    def test_an_older_file_without_it_still_loads(self, tmp_path):
+        import json
+
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({"total_steps": 29500, "speed_pps": 1200.0, "bed_up": False}))
+        config = Config.load(str(path))
+        assert config.total_steps == 29500
+        assert config.rope_delay_seconds == 10.0
+
+
+class TestConfigFileFormat:
+    """The file is checked into git and written on two operating systems, so its bytes
+    must not depend on which one last touched it."""
+
+    def test_it_ends_with_a_newline(self, tmp_path):
+        path = tmp_path / "config.json"
+        Config(path=str(path)).save()
+        assert path.read_bytes().endswith(b"}\n")
+
+    def test_it_uses_unix_line_endings(self, tmp_path):
+        path = tmp_path / "config.json"
+        Config(path=str(path)).save()
+        assert b"\r\n" not in path.read_bytes()
+
+    def test_it_is_utf8(self, tmp_path):
+        path = tmp_path / "config.json"
+        Config(weather_location="höfen", path=str(path)).save()
+        assert Config.load(str(path)).weather_location == "höfen"

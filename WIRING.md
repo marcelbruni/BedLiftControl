@@ -150,15 +150,17 @@ Fernbedienung.
 
 ## Funktionstest
 
-1. App starten, Knopf **„230V aus"** in der unteren Leiste antippen.
-   Er wechselt auf **„230V ein"** und wird rot, das Relais klickt, der
-   Wechselrichter läuft an.
-2. Nochmal antippen: **„230V aus"**, der Wechselrichter geht aus.
+1. App starten, den grauen Knopf **„230V"** in der unteren Leiste antippen.
+   Er wird rot, das Relais klickt, der Wechselrichter läuft an.
+2. Nochmal antippen: der Knopf wird wieder grau, der Wechselrichter geht aus.
 3. Einen Pfeil antippen. Über beiden Pfeilen erscheint ein Countdown
    („230V startet … 10s"), danach fährt das Bett. War der Wechselrichter schon
    an und eingelaufen, geht es ohne Wartezeit los.
    Miss dabei, wie lange dein Gerät wirklich braucht — die Wartezeit stellst du
    unter ⚙ → **230V Anlauf** zwischen 0 und 15 Sekunden ein.
+   Beim Herunterfahren von ganz oben kommt noch die Zeit zum Lösen der
+   Sicherungsseile dazu (⚙ → **Seile lösen**, 0 bis 20 Sekunden); der Knopf sagt
+   dann „Seile lösen!" statt „230V startet".
 4. Während der Fahrt ist der 230V-Knopf ausgegraut — mitten in der Fahrt die
    Motoren stromlos zu machen würde die gespeicherte Bettposition verfälschen.
 5. Bis zum Anschlag fahren lassen. Unten geht das 230V von selbst wieder aus,

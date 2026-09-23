@@ -106,7 +106,7 @@ class BedController:
             logger.info("Stop requested at step %s of %s", self._steps_done, self._steps_total)
         self._stop_requested.set()
 
-    def run_async(self, action: Callable[[], None], on_complete: Optional[Callable[[], None]] = None) -> bool:
+    def run_async(self, action: Callable[[], None]) -> bool:
         """Run a movement in a background thread so the UI stays responsive.
 
         Only one movement runs at a time; returns False if one is already active.
@@ -119,9 +119,6 @@ class BedController:
                 action()
             except Exception:  # worker-thread boundary: never swallow silently
                 logger.exception("Movement failed")
-            finally:
-                if on_complete is not None:
-                    on_complete()
 
         self._move_thread = threading.Thread(target=worker, daemon=True)
         self._move_thread.start()

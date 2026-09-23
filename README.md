@@ -151,6 +151,7 @@ All settings live in a single file, `data/config.json`:
 | `kiosk`          | Fullscreen instead of a window                           |
 | `weather_location` | Selected weather location, `phone` follows the public IP |
 | `inverter_startup_seconds` | How long a movement waits after switching the inverter on (0-15) |
+| `rope_delay_seconds` | Extra wait before the bed leaves the top, for the ropes (0-20) |
 
 The file is written automatically when settings change, when the bed is moved and
 when a movement is stopped.
@@ -165,8 +166,8 @@ The motors run off a Victron inverter whose remote terminal is a potential-free 
 closed means on. A relay on GPIO 17 sits across that contact, so the app can switch mains
 power the same way a wall switch would.
 
-The "230V" button in the bottom bar switches it by hand and shows the state, turning
-red while mains is live. Starting a bed movement switches it on by itself and waits
+The "230V" button in the bottom bar switches it by hand. Its label never changes; the
+colour is the state, red while mains is live and grey while it is not. Starting a bed movement switches it on by itself and waits
 before the motors turn — the inverter's output is not stable the instant the contact
 closes. The wait is shown as a countdown on the STOP button, and STOP during the
 countdown drops the movement while leaving the inverter running.
@@ -176,9 +177,14 @@ top after the "Sicherungsseile anbringen!" prompt is acknowledged — the motors
 bed while the ropes go on. A movement stopped half way leaves it running, because the bed
 is still hanging there and the rest of the travel needs the motors.
 
-The wait is the one setting: **230V Anlauf**, anywhere from 0 to 15 seconds. There is
-no switch to turn the automatic off - without it a movement has no power at all, which
-is not a mode worth offering.
+Lowering from the very top waits a second time, for the safety ropes: **Seile lösen**,
+0 to 20 seconds, added on top of the start-up. The countdown says so - "230V startet"
+while mains comes up, then "Seile lösen!" for the rest - and it only ever appears on the
+way down from the top, where the ropes actually are.
+
+Both waits are settings (**230V Anlauf** and **Seile lösen**). There is no switch to turn
+the automatic off - without it a movement has no power at all, which is not a mode worth
+offering.
 
 Two deliberate choices:
 
@@ -196,7 +202,10 @@ When the Pi has internet (e.g. phone tethering while camping), the main panel sh
 the weather from [Open-Meteo](https://open-meteo.com) — free and without an API key.
 No configuration is required.
 
-The "Ort" button picks the location: the current one, derived from the public IP
+Next to the city sits the two-letter weekday of the reading on display - taken from the
+reading's own timestamp, so an hours-old one does not claim to be today.
+
+The **Ort** dropdown in the settings picks the location: the current one, derived from the public IP
 (rough, city level), or one of the places we travel to — Höfen bei Thun, Châtel,
 La Cure, Schilthorn, Crans-Montana. Every refresh fetches **all** of them in a single
 request and caches the lot to `data/weather.json`, so switching is instant and the

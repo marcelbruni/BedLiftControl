@@ -30,6 +30,9 @@ def main() -> None:
     finally:
         timesync.stop()
         weather.stop()
+        # releasing the pins would drop the relay anyway; doing it by name keeps the
+        # switch-off in the log next to everything else the inverter did
+        inverter.turn_off()
         controller.cleanup()
 
 

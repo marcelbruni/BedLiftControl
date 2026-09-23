@@ -23,6 +23,9 @@ DEFAULT_WEATHER_LOCATION = "phone"
 DEFAULT_INVERTER_STARTUP_SECONDS = 10.0
 INVERTER_STARTUP_MIN = 0.0
 INVERTER_STARTUP_MAX = 15.0
+DEFAULT_ROPE_DELAY_SECONDS = 10.0
+ROPE_DELAY_MIN = 0.0
+ROPE_DELAY_MAX = 20.0
 
 
 @dataclass
@@ -33,6 +36,7 @@ class Config:
     kiosk: bool = DEFAULT_KIOSK
     weather_location: str = DEFAULT_WEATHER_LOCATION
     inverter_startup_seconds: float = DEFAULT_INVERTER_STARTUP_SECONDS
+    rope_delay_seconds: float = DEFAULT_ROPE_DELAY_SECONDS
     # 0 = bed fully down, total_steps = fully up. Anything in between is a position
     # the user stopped at, from which the next move continues or reverses.
     position_steps: int = -1  # -1 means "derive from bed_up", see load() and _validate()
@@ -51,7 +55,7 @@ class Config:
             logger.info("Config file %s not found, using defaults", path)
             return cls(path=str(path))
         try:
-            data = json.loads(file.read_text())
+            data = json.loads(file.read_text(encoding="utf-8"))
             config = cls(
                 total_steps=int(data["total_steps"]),
                 speed_pps=float(data["speed_pps"]),
@@ -63,6 +67,8 @@ class Config:
                 weather_location=str(data.get("weather_location", DEFAULT_WEATHER_LOCATION)),
                 inverter_startup_seconds=float(
                     data.get("inverter_startup_seconds", DEFAULT_INVERTER_STARTUP_SECONDS)),
+                rope_delay_seconds=float(
+                    data.get("rope_delay_seconds", DEFAULT_ROPE_DELAY_SECONDS)),
                 path=str(path),
             )
         except (ValueError, KeyError, OSError) as error:
@@ -88,13 +94,15 @@ class Config:
         if self.speed_pps <= 0:
             logger.warning("speed_pps %s invalid, resetting to %s", self.speed_pps, DEFAULT_SPEED_PPS)
             self.speed_pps = DEFAULT_SPEED_PPS
-        clamped = min(INVERTER_STARTUP_MAX, max(INVERTER_STARTUP_MIN, self.inverter_startup_seconds))
-        if clamped != self.inverter_startup_seconds:
-            logger.warning(
-                "inverter_startup_seconds %s out of range, clamping to %s",
-                self.inverter_startup_seconds, clamped,
-            )
-            self.inverter_startup_seconds = clamped
+        self._clamp("inverter_startup_seconds", INVERTER_STARTUP_MIN, INVERTER_STARTUP_MAX)
+        self._clamp("rope_delay_seconds", ROPE_DELAY_MIN, ROPE_DELAY_MAX)
+
+    def _clamp(self, name: str, low: float, high: float) -> None:
+        value = getattr(self, name)
+        clamped = min(high, max(low, value))
+        if clamped != value:
+            logger.warning("%s %s out of range, clamping to %s", name, value, clamped)
+            setattr(self, name, clamped)
 
     def save(self) -> None:
         payload = json.dumps(
@@ -106,11 +114,15 @@ class Config:
                 "position_steps": self.position_steps,
                 "weather_location": self.weather_location,
                 "inverter_startup_seconds": self.inverter_startup_seconds,
+                "rope_delay_seconds": self.rope_delay_seconds,
             },
             indent=2,
         )
         target = Path(self.path)
         temp = Path(str(target) + ".tmp")
         with self._lock:
-            temp.write_text(payload)
+            # explicit encoding and line ending: this file is written on the Pi and
+            # on a Windows machine alike, and it is checked in - it must not flip
+            with open(temp, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(payload + "\n")
             os.replace(temp, target)  # atomic on the same filesystem

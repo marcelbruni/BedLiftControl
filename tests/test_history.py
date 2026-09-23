@@ -233,3 +233,20 @@ class TestLocationVisit:
     def test_position_is_rounded_for_comparison(self):
         visit = LocationVisit("2026-09-14T17:04:12", "Thun", 46.7200001, 7.5599999)
         assert visit.position == (46.72, 7.56)
+
+
+class TestHistoryFileFormat:
+    def test_it_ends_with_a_newline(self, tmp_path):
+        path = tmp_path / "history.json"
+        History(path=str(path)).record_position(46.72, 7.56, "Thun")
+        assert path.read_bytes().endswith(b"\n")
+
+    def test_it_uses_unix_line_endings(self, tmp_path):
+        path = tmp_path / "history.json"
+        History(path=str(path)).record_position(46.72, 7.56, "Thun")
+        assert b"\r\n" not in path.read_bytes()
+
+    def test_umlauts_survive(self, tmp_path):
+        path = tmp_path / "history.json"
+        History(path=str(path)).record_position(46.72, 7.56, "Höfen bei Thun")
+        assert History(path=str(path)).last_location.city == "Höfen bei Thun"

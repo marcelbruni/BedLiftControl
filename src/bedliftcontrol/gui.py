@@ -14,9 +14,14 @@ from tkinter import messagebox
 import customtkinter as ctk
 
 from bedliftcontrol import clock, icons
-from bedliftcontrol.inverter import Inverter
-from bedliftcontrol.config import INVERTER_STARTUP_MAX, INVERTER_STARTUP_MIN
+from bedliftcontrol.config import (
+    INVERTER_STARTUP_MAX,
+    INVERTER_STARTUP_MIN,
+    ROPE_DELAY_MAX,
+    ROPE_DELAY_MIN,
+)
 from bedliftcontrol.controller import BedController
+from bedliftcontrol.inverter import Inverter
 from bedliftcontrol.timesync import TimeSync
 from bedliftcontrol.weather import LOCATIONS, WEATHER_CODES, WeatherService, location_or_default
 
@@ -38,18 +43,28 @@ BUTTON_COLOR = "#2fa572"
 BUTTON_DISABLED_COLOR = "#333333"
 STOP_BUTTON_COLOR = "#c62828"
 STOP_BUTTON_HOVER_COLOR = "#8e1f1f"
+CORRECTION_BUTTON_WIDTH = 110
 CORRECTION_BUTTON_HEIGHT = 90
+# from the left edge of the left button to the right edge of the right one
+CORRECTION_ROW_WIDTH = 2 * CORRECTION_BUTTON_WIDTH + 30
 # Held longer than this and the correction runs on until the button is let go;
 # released sooner and it is a plain click worth CORRECTION_STEPS.
 CORRECTION_HOLD_DELAY_MS = 400
-LOCATION_BUTTON_WIDTH = 260
+BAR_ICON_WIDTH = 50   # a single glyph
+BAR_BUTTON_WIDTH = 70  # a short word
+LOCATION_MENU_WIDTH = 300
 KIOSK_BUTTON_WIDTH = 190   # the longest label of the three, side by side in one row
 SETTINGS_BUTTON_WIDTH = 120
-LOCATION_BUTTON_HEIGHT = 44
+SETTINGS_SLIDER_WIDTH = 300
+SETTINGS_VALUE_WIDTH = 60
+# the three buttons side by side, including the gaps between them
+SETTINGS_ROW_WIDTH = KIOSK_BUTTON_WIDTH + 2 * SETTINGS_BUTTON_WIDTH + 32
+CLOSE_BUTTON_HEIGHT = 44  # a finger, not a mouse pointer
 HISTORY_ROW_PITCH = 26
 HISTORY_WIDTH = 420
-INVERTER_WAIT_TICK_MS = 250
-INVERTER_WAIT_FONT_SIZE = 22  # the countdown is three short lines, not one word
+HISTORY_HEADER_HEIGHT = 110  # the nights counter and the section title above the list
+COUNTDOWN_TICK_MS = 250
+COUNTDOWN_FONT_SIZE = 22  # the countdown is short lines, not one word
 POWER_ON_COLOR = "#c62828"  # red while mains is live: a warning, not a status
 POWER_OFF_COLOR = "#555555"
 
@@ -65,13 +80,14 @@ FORECAST_ICON_SIZE = 34     # one per day, must stay inside FORECAST_COL_WIDTH
 RAIN_DROP_SIZE = 11         # drawn, because Noto Color Emoji has no drop on the Pi
 RAIN_COLOR = "#5aa0e0"
 
+WINDOW_PAD = 16  # inner padding shared by the child windows
+# The Pi panel is 800x480; leave room for the title bar so a window fits whole and its
+# content scrolls inside it instead of running off the bottom of the screen.
+SCREEN_MARGIN = 70
+
 # reference window listing every weather code with its icon
 ICON_TABLE_ICON_SIZE = 26
 ICON_TABLE_ROW_HEIGHT = 26
-ICON_TABLE_PAD = 16
-# The Pi panel is 800x480; leave room for the title bar so the window fits whole and
-# the table scrolls inside it instead of running off the bottom of the screen.
-ICON_TABLE_SCREEN_MARGIN = 70
 ICON_TABLE_ROW_PITCH = ICON_TABLE_ROW_HEIGHT + 4  # row height plus the grid pady
 ICON_TABLE_COLUMNS = [  # (header, width, anchor)
     ("Code", 50, "e"),
@@ -84,6 +100,12 @@ STEPS_MAX = 30000
 SPEED_MIN = 200
 SPEED_MAX = 1400
 INVERTER_DELAY_STEPS = int(INVERTER_STARTUP_MAX - INVERTER_STARTUP_MIN)  # whole seconds
+ROPE_DELAY_STEPS = int(ROPE_DELAY_MAX - ROPE_DELAY_MIN)
+
+
+def _now() -> float:
+    """Wrapped so a test can run the waiting out without actually waiting."""
+    return time.monotonic()
 
 
 def _panel_background() -> str:
@@ -110,7 +132,8 @@ class BedGui:
         self.timesync = timesync if timesync is not None else TimeSync()
         self._move_context: MoveContext | None = None
         self._pending_move = None
-        self._inverter_timer = None
+        self._wait_timer = None
+        self._wait_until = 0.0
         self._bar_fill_level = 0.0
         self._clock_text = None
         self._kiosk_button = None
@@ -120,6 +143,7 @@ class BedGui:
         self._steps_value_label = None
         self._speed_value_label = None
         self._delay_value_label = None
+        self._rope_value_label = None
         self._forecast_labels = []
         self._rendered_forecast_key = None
         self._build()
@@ -137,19 +161,21 @@ class BedGui:
         # bottom action bar
         bottom = ctk.CTkFrame(self.app, corner_radius=0)
         bottom.pack(side="bottom", fill="x")
-        ctk.CTkButton(bottom, text="⚙", width=50, command=self._settings_window).pack(side="left", padx=4, pady=6)
-        self.corrections_button = ctk.CTkButton(bottom, text="↑↓", width=50, command=self._corrections_window)
+        ctk.CTkButton(bottom, text="⚙", width=BAR_ICON_WIDTH,
+                      command=self._settings_window).pack(side="left", padx=4, pady=6)
+        self.corrections_button = ctk.CTkButton(bottom, text="↑↓", width=BAR_ICON_WIDTH,
+                                                command=self._corrections_window)
         self.corrections_button.pack(side="left", padx=4, pady=6)
-        self.location_button = ctk.CTkButton(bottom, text="Ort", width=70, command=self._location_window)
-        self.location_button.pack(side="left", padx=4, pady=6)
-        self.power_button = ctk.CTkButton(bottom, text="", width=120, command=self._toggle_inverter)
+        self.power_button = ctk.CTkButton(bottom, text="230V", width=BAR_BUTTON_WIDTH,
+                                          command=self._toggle_inverter)
         self.power_button.pack(side="left", padx=4, pady=6)
         self._build_clock_panel(bottom)
 
         # left vertical bar: empty when the bed is up, fills from the top down as the
         # bed is lowered (custom, since CTkProgressBar only ever fills from the bottom)
-        left = ctk.CTkFrame(self.app)
-        left.pack(side="left", fill="y", padx=10, pady=10)
+        self.progress_frame = ctk.CTkFrame(self.app)
+        self.progress_frame.pack(side="left", fill="y", padx=10, pady=10)
+        left = self.progress_frame
         self.progress_track = ctk.CTkFrame(left, width=28, fg_color="#3a3a3a", corner_radius=10)
         self.progress_track.pack(side="top", fill="y", expand=True, padx=6, pady=(6, 4))
         self.progress_track.pack_propagate(False)
@@ -270,10 +296,9 @@ class BedGui:
         self._update_power_button()
 
     def _update_power_button(self) -> None:
-        on = self.inverter.on
+        """The label stays "230V"; red or grey says whether it is live."""
         self.power_button.configure(
-            text="230V ein" if on else "230V aus",
-            fg_color=POWER_ON_COLOR if on else POWER_OFF_COLOR,
+            fg_color=POWER_ON_COLOR if self.inverter.on else POWER_OFF_COLOR,
             state="disabled" if self.controller.is_moving else "normal",
         )
 
@@ -289,13 +314,23 @@ class BedGui:
         self._pending_move = action
         self.inverter.turn_on()
         self._update_power_button()
-        self._wait_for_inverter()
+        self._wait_until = _now() + self.inverter.seconds_until_ready + self._rope_delay(context)
+        self._wait_before_move()
 
-    def _wait_for_inverter(self) -> None:
-        """The motors hang off the inverter, so the movement waits out its start-up."""
+    def _ropes_to_release(self, context: MoveContext | None) -> bool:
+        """Only on the way down from the very top are the safety ropes still attached."""
+        return context == MoveContext.DOWN and self.controller.at_top
+
+    def _rope_delay(self, context: MoveContext) -> float:
+        """Extra time before the bed leaves the top, to get the safety ropes off."""
+        return self.controller.config.rope_delay_seconds if self._ropes_to_release(context) else 0.0
+
+    def _wait_before_move(self) -> None:
+        """The motors hang off the inverter, so the movement waits out its start-up -
+        and, on the way down from the top, the extra time for the ropes."""
         if self._pending_move is None:  # STOP was pressed during the countdown
             return
-        remaining = self.inverter.seconds_until_ready
+        remaining = self._wait_until - _now()
         if remaining <= 0:
             action, self._pending_move = self._pending_move, None
             self._set_stop_button_text("STOP", STOP_FONT_SIZE)
@@ -303,14 +338,16 @@ class BedGui:
             self._schedule_poll()
             return
         self._set_stop_button_text(self._countdown_text(math.ceil(remaining)),
-                                   INVERTER_WAIT_FONT_SIZE)
-        self._inverter_timer = self.app.after(INVERTER_WAIT_TICK_MS, self._wait_for_inverter)
+                                   COUNTDOWN_FONT_SIZE)
+        self._wait_timer = self.app.after(COUNTDOWN_TICK_MS, self._wait_before_move)
 
     def _countdown_text(self, seconds: int) -> str:
+        # the waiting time is exactly what the ropes need, so the button says so
+        ropes = self._ropes_to_release(self._move_context)
+        if ropes and self.inverter.ready:
+            return f"Seile\nlösen!\n{seconds}s"
         text = f"230V\nstartet\n{seconds}s"
-        if self._move_context == MoveContext.DOWN and self.controller.at_top:
-            # the ropes hold the bed up there and have to come off before it can be
-            # lowered; waiting out the start-up is exactly the time to do it
+        if ropes:
             text += "\n\nSeile lösen!"
         return text
 
@@ -321,9 +358,9 @@ class BedGui:
         """STOP during the start-up: the movement is dropped, the inverter keeps running.
         It was switched on deliberately and the 230V button is the way back off."""
         self._pending_move = None
-        if self._inverter_timer is not None:
-            self.app.after_cancel(self._inverter_timer)
-            self._inverter_timer = None
+        if self._wait_timer is not None:
+            self.app.after_cancel(self._wait_timer)
+            self._wait_timer = None
         self._set_stop_button_text("STOP", STOP_FONT_SIZE)
         self._hide_stop_button()
         self._move_context = None
@@ -439,6 +476,7 @@ class BedGui:
         if name == "settings":
             self._kiosk_button = None
             self._delay_value_label = None
+            self._rope_value_label = None
         if name == "corrections":
             # the buttons are about to be destroyed, so no release event is coming
             self._cancel_correction_timer()
@@ -446,38 +484,53 @@ class BedGui:
         if window is not None:
             window.destroy()
 
+    def _add_close_button(self, parent, row: int, width: int, name: str, columnspan: int):
+        """Closing by the window decoration is a small target on a touch panel."""
+        button = ctk.CTkButton(parent, text="Schliessen", width=width,
+                               height=CLOSE_BUTTON_HEIGHT,
+                               command=lambda: self._on_window_closed(name))
+        button.grid(row=row, column=0, columnspan=columnspan, padx=12, pady=(12, 0))
+        return button
+
+    def _place_beside_the_bar(self, window) -> None:
+        """Right of the progress bar, at the top edge - where the hand already is."""
+        window.update_idletasks()
+        left_edge = self.progress_frame.winfo_rootx() + self.progress_frame.winfo_width()
+        window.geometry(f"+{left_edge}+0")
+
     def _settings_window(self) -> None:
         self._toggle_window("settings", self._build_settings_window)
 
     def _build_settings_window(self):
         window = ctk.CTkToplevel(self.app)
         window.title("Settings")
-        window.geometry("520x250")
+        window.geometry("520x390")
         content = ctk.CTkFrame(window, fg_color="transparent")
         content.pack(expand=True)
-        ctk.CTkLabel(content, text="total steps").grid(row=0, column=0, padx=12, pady=12, sticky="e")
-        steps_slider = ctk.CTkSlider(content, from_=STEPS_MIN, to=STEPS_MAX, width=300, command=self._on_steps_change)
-        steps_slider.set(self.controller.config.total_steps)
-        steps_slider.grid(row=0, column=1, padx=12, pady=12)
-        self._steps_value_label = ctk.CTkLabel(content, text=str(self.controller.config.total_steps), width=60)
-        self._steps_value_label.grid(row=0, column=2, padx=(4, 0))
-        ctk.CTkLabel(content, text="speed pps").grid(row=1, column=0, padx=12, pady=12, sticky="e")
-        speed_slider = ctk.CTkSlider(content, from_=SPEED_MIN, to=SPEED_MAX, width=300, command=self._on_speed_change)
-        speed_slider.set(self.controller.config.speed_pps)
-        speed_slider.grid(row=1, column=1, padx=12, pady=12)
-        self._speed_value_label = ctk.CTkLabel(content, text=str(int(self.controller.config.speed_pps)), width=60)
-        self._speed_value_label.grid(row=1, column=2, padx=(4, 0))
-        ctk.CTkLabel(content, text="230V Anlauf").grid(row=2, column=0, padx=12, pady=12, sticky="e")
-        delay_slider = ctk.CTkSlider(content, from_=INVERTER_STARTUP_MIN, to=INVERTER_STARTUP_MAX,
-                                     number_of_steps=INVERTER_DELAY_STEPS, width=300,
-                                     command=self._on_inverter_delay_change)
-        delay_slider.set(self.controller.config.inverter_startup_seconds)
-        delay_slider.grid(row=2, column=1, padx=12, pady=12)
-        self._delay_value_label = ctk.CTkLabel(
-            content, text=self._delay_text(self.controller.config.inverter_startup_seconds), width=60)
-        self._delay_value_label.grid(row=2, column=2, padx=(4, 0))
+        config = self.controller.config
+        self._steps_value_label = self._add_slider_row(
+            content, 0, "total steps", STEPS_MIN, STEPS_MAX, config.total_steps,
+            self._on_steps_change, str(config.total_steps))
+        self._speed_value_label = self._add_slider_row(
+            content, 1, "speed pps", SPEED_MIN, SPEED_MAX, config.speed_pps,
+            self._on_speed_change, str(int(config.speed_pps)))
+        self._delay_value_label = self._add_slider_row(
+            content, 2, "230V Anlauf", INVERTER_STARTUP_MIN, INVERTER_STARTUP_MAX,
+            config.inverter_startup_seconds, self._on_inverter_delay_change,
+            self._delay_text(config.inverter_startup_seconds), steps=INVERTER_DELAY_STEPS)
+        self._rope_value_label = self._add_slider_row(
+            content, 3, "Seile lösen", ROPE_DELAY_MIN, ROPE_DELAY_MAX,
+            config.rope_delay_seconds, self._on_rope_delay_change,
+            self._delay_text(config.rope_delay_seconds), steps=ROPE_DELAY_STEPS)
+        ctk.CTkLabel(content, text="Ort").grid(row=4, column=0, padx=12, pady=12, sticky="e")
+        self._location_menu = ctk.CTkOptionMenu(
+            content, width=LOCATION_MENU_WIDTH, values=[place.label for place in LOCATIONS],
+            command=self._on_location_chosen)
+        self._location_menu.set(location_or_default(self.weather.selected).label)
+        self._location_menu.grid(row=4, column=1, padx=12, pady=12, sticky="w")
+
         buttons = ctk.CTkFrame(content, fg_color="transparent")
-        buttons.grid(row=3, column=0, columnspan=3, padx=12, pady=(16, 12))
+        buttons.grid(row=5, column=0, columnspan=3, padx=12, pady=(16, 0))
         self._kiosk_button = ctk.CTkButton(buttons, text=self._kiosk_button_text(),
                                            width=KIOSK_BUTTON_WIDTH, command=self._toggle_kiosk)
         self._kiosk_button.pack(side="left", padx=(0, 8))
@@ -485,31 +538,53 @@ class BedGui:
                       command=self._weather_icons_window).pack(side="left", padx=8)
         ctk.CTkButton(buttons, text="Historie", width=SETTINGS_BUTTON_WIDTH,
                       command=self._history_window).pack(side="left", padx=(8, 0))
+        self._add_close_button(content, row=6, width=SETTINGS_ROW_WIDTH,
+                               name="settings", columnspan=3)
+        self._place_beside_the_bar(window)
         return window
+
+    @staticmethod
+    def _add_slider_row(parent, row, label, low, high, value, command, value_text, steps=None):
+        """One settings line: name, slider, current value. Returns the value label."""
+        ctk.CTkLabel(parent, text=label).grid(row=row, column=0, padx=12, pady=12, sticky="e")
+        slider = ctk.CTkSlider(parent, from_=low, to=high, width=SETTINGS_SLIDER_WIDTH,
+                               number_of_steps=steps, command=command)
+        slider.set(value)
+        slider.grid(row=row, column=1, padx=12, pady=12)
+        value_label = ctk.CTkLabel(parent, text=value_text, width=SETTINGS_VALUE_WIDTH)
+        value_label.grid(row=row, column=2, padx=(4, 0))
+        return value_label
 
     @staticmethod
     def _delay_text(seconds) -> str:
         return f"{round(seconds)} s"
 
+    def _store_setting(self, name: str, value, label, text: str) -> None:
+        """Settings are written straight through: the sliders have no OK button, and a
+        vehicle can lose power between two taps."""
+        setattr(self.controller.config, name, value)
+        self.controller.config.save()
+        if label is not None:  # the settings window may be closed again by now
+            label.configure(text=text)
+
     def _on_inverter_delay_change(self, value) -> None:
         seconds = float(round(value))
-        self.controller.config.inverter_startup_seconds = seconds
-        self.controller.config.save()
         self.inverter.startup_seconds = seconds
-        if self._delay_value_label is not None:
-            self._delay_value_label.configure(text=self._delay_text(seconds))
+        self._store_setting("inverter_startup_seconds", seconds,
+                            self._delay_value_label, self._delay_text(seconds))
+
+    def _on_rope_delay_change(self, value) -> None:
+        seconds = float(round(value))
+        self._store_setting("rope_delay_seconds", seconds,
+                            self._rope_value_label, self._delay_text(seconds))
 
     def _on_steps_change(self, value) -> None:
-        self.controller.config.total_steps = int(value)
-        self.controller.config.save()
-        if self._steps_value_label is not None:
-            self._steps_value_label.configure(text=str(int(value)))
+        self._store_setting("total_steps", int(value),
+                            self._steps_value_label, str(int(value)))
 
     def _on_speed_change(self, value) -> None:
-        self.controller.config.speed_pps = float(value)
-        self.controller.config.save()
-        if self._speed_value_label is not None:
-            self._speed_value_label.configure(text=str(int(value)))
+        self._store_setting("speed_pps", float(value),
+                            self._speed_value_label, str(int(value)))
 
     def _corrections_window(self) -> None:
         self._toggle_window("corrections", self._build_corrections_window)
@@ -517,7 +592,7 @@ class BedGui:
     def _build_corrections_window(self):
         window = ctk.CTkToplevel(self.app)
         window.title("Corrections")
-        window.geometry("320x320")
+        window.geometry("320x350")
         content = ctk.CTkFrame(window, fg_color="transparent")
         content.pack(expand=True)
         ctk.CTkLabel(content, text="back").grid(row=0, column=0, padx=15, pady=(0, 8))
@@ -531,37 +606,25 @@ class BedGui:
             ("↓", 2, 1, self.controller.correct_front_down, self.controller.hold_front_down),
         ]
         for text, row, column, click_action, hold_action in buttons:
-            button = ctk.CTkButton(content, text=text, width=110, height=CORRECTION_BUTTON_HEIGHT)
+            button = ctk.CTkButton(content, text=text, width=CORRECTION_BUTTON_WIDTH,
+                                   height=CORRECTION_BUTTON_HEIGHT)
             button.grid(row=row, column=column, padx=15, pady=8)
             self._bind_correction(button, click_action, hold_action)
+        self._add_close_button(content, row=3, width=CORRECTION_ROW_WIDTH,
+                               name="corrections", columnspan=2)
+        self._place_beside_the_bar(window)
         return window
 
-    def _location_window(self) -> None:
-        self._toggle_window("location", self._build_location_window)
-
-    def _build_location_window(self):
-        window = ctk.CTkToplevel(self.app)
-        window.title("Ort")
-        content = ctk.CTkFrame(window, fg_color="transparent")
-        content.pack(padx=ICON_TABLE_PAD, pady=ICON_TABLE_PAD)
-        selected = self.weather.selected
-        for row, location in enumerate(LOCATIONS):
-            active = location.key == selected
-            ctk.CTkButton(
-                content,
-                text=location.label,
-                width=LOCATION_BUTTON_WIDTH,
-                height=LOCATION_BUTTON_HEIGHT,
-                fg_color=BUTTON_COLOR if active else BUTTON_DISABLED_COLOR,
-                command=lambda key=location.key: self._select_location(key),
-            ).grid(row=row, column=0, padx=6, pady=4)
-        return window
+    def _on_location_chosen(self, label: str) -> None:
+        for location in LOCATIONS:
+            if location.label == label:
+                self._select_location(location.key)
+                return
 
     def _select_location(self, key: str) -> None:
         self.weather.select(key)
         self.controller.config.weather_location = key
         self.controller.config.save()
-        self._on_window_closed("location")
         self._apply_weather()
 
     def _history_window(self) -> None:
@@ -571,7 +634,7 @@ class BedGui:
         window = ctk.CTkToplevel(self.app)
         window.title("Historie")
         content = ctk.CTkFrame(window, fg_color="transparent")
-        content.pack(padx=ICON_TABLE_PAD, pady=ICON_TABLE_PAD, fill="both", expand=True)
+        content.pack(padx=WINDOW_PAD, pady=WINDOW_PAD, fill="both", expand=True)
 
         nights = self.history.nights if self.history is not None else 0
         ctk.CTkLabel(content, text=f"Übernachtungen: {nights}",
@@ -594,7 +657,7 @@ class BedGui:
 
     @staticmethod
     def _history_visible_height(screen_height: int, rows: int) -> int:
-        available = screen_height - ICON_TABLE_SCREEN_MARGIN - 2 * ICON_TABLE_PAD - 110
+        available = screen_height - SCREEN_MARGIN - 2 * WINDOW_PAD - HISTORY_HEADER_HEIGHT
         wanted = max(rows, 1) * HISTORY_ROW_PITCH
         return max(HISTORY_ROW_PITCH, min(wanted, available))
 
@@ -617,7 +680,7 @@ class BedGui:
         Budgeted so the finished window (this plus the padding above and below) still
         fits the screen with room for the title bar, which the 800x480 Pi panel needs.
         """
-        available = screen_height - ICON_TABLE_SCREEN_MARGIN - 2 * ICON_TABLE_PAD
+        available = screen_height - SCREEN_MARGIN - 2 * WINDOW_PAD
         wanted = (rows + 1) * ICON_TABLE_ROW_PITCH  # +1 for the header row
         return max(ICON_TABLE_ROW_PITCH, min(wanted, available))
 
@@ -633,7 +696,7 @@ class BedGui:
         visible_height = self._icon_table_visible_height(window.winfo_screenheight(), len(WEATHER_CODES))
         content = ctk.CTkScrollableFrame(window, fg_color="transparent",
                                          width=table_width, height=visible_height)
-        content.pack(fill="both", expand=True, padx=ICON_TABLE_PAD, pady=ICON_TABLE_PAD)
+        content.pack(fill="both", expand=True, padx=WINDOW_PAD, pady=WINDOW_PAD)
 
         header_font = ctk.CTkFont(size=13, weight="bold")
         for column, (title, width, anchor) in enumerate(ICON_TABLE_COLUMNS):
@@ -652,8 +715,8 @@ class BedGui:
 
         # size the window to the visible part of the table; the rest is scrolled to
         window.update_idletasks()
-        window.geometry(f"{content.winfo_reqwidth() + 2 * ICON_TABLE_PAD}"
-                        f"x{visible_height + 2 * ICON_TABLE_PAD}")
+        window.geometry(f"{content.winfo_reqwidth() + 2 * WINDOW_PAD}"
+                        f"x{visible_height + 2 * WINDOW_PAD}")
         return window
 
     def _refresh_weather(self) -> None:
@@ -675,6 +738,7 @@ class BedGui:
         """A location that has not been fetched yet must not keep showing the previous
         one's numbers."""
         self.weather_city.configure(text=location_or_default(self.weather.selected).label)
+        self.weather_day.configure(text="")
         self.weather_icon.show("unknown")
         self.weather_temp.configure(text="")
         self.weather_desc.configure(text="Noch keine Daten")
@@ -741,8 +805,13 @@ class BedGui:
     def _build_current_panel(self, parent) -> None:
         self.current_frame = ctk.CTkFrame(parent, fg_color="transparent")
         self.current_frame.pack(fill="x", pady=(20, 0))
-        self.weather_city = ctk.CTkLabel(self.current_frame, text="", font=ctk.CTkFont(size=22))
-        self.weather_city.pack()
+        city_row = ctk.CTkFrame(self.current_frame, fg_color="transparent")
+        city_row.pack()
+        self.weather_city = ctk.CTkLabel(city_row, text="", font=ctk.CTkFont(size=22))
+        self.weather_city.pack(side="left")
+        self.weather_day = ctk.CTkLabel(city_row, text="", font=ctk.CTkFont(size=22),
+                                        text_color="#888888")
+        self.weather_day.pack(side="left", padx=(10, 0))
         weather_row = ctk.CTkFrame(self.current_frame, fg_color="transparent")
         weather_row.pack(pady=6, padx=(40, 0))  # left pad shifts the centred group ~20px right
         self.weather_icon = icons.IconCanvas(weather_row, size=WEATHER_ICON_SIZE, background=_panel_background())
@@ -755,6 +824,7 @@ class BedGui:
     def _update_current_panel(self, weather) -> None:
         """Conditions right now - a point in time, not the day as a whole."""
         self.weather_city.configure(text=weather.city)
+        self.weather_day.configure(text=weather.weekday)
         self.weather_icon.show(weather.icon)
         self.weather_temp.configure(text=f"{round(weather.temperature)}°C")
         self.weather_desc.configure(text=weather.description)

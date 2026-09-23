@@ -20,6 +20,7 @@ WIDGETS = [
     "CTkLabel",
     "CTkToplevel",
     "CTkSlider",
+    "CTkOptionMenu",
     "CTkFont",
 ]
 
@@ -52,6 +53,14 @@ def ctk_widgets(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def elapsed(monkeypatch):
+    """The waiting clock, under test control: elapsed[0] += n skips n seconds."""
+    seconds = [1000.0]
+    monkeypatch.setattr(gui_module, "_now", lambda: seconds[0])
+    return seconds
+
+
+@pytest.fixture(autouse=True)
 def ready_inverter(monkeypatch):
     """Tests that are not about the inverter get one that is already running, so a
     movement starts straight away instead of waiting out the start-up."""
@@ -78,6 +87,7 @@ def controller():
     fake.config.speed_pps = 800.0
     fake.config.kiosk = False
     fake.config.inverter_startup_seconds = 10.0
+    fake.config.rope_delay_seconds = 10.0
     return fake
 
 
@@ -570,10 +580,10 @@ class TestIconTableWindow:
     """The 28 row table is taller than the Pi's 480px panel, so it scrolls."""
 
     def test_fits_the_pi_panel(self, gui):
-        from bedliftcontrol.gui import ICON_TABLE_PAD
+        from bedliftcontrol.gui import WINDOW_PAD
 
         visible = gui._icon_table_visible_height(480, 28)
-        window_height = visible + 2 * ICON_TABLE_PAD
+        window_height = visible + 2 * WINDOW_PAD
         assert window_height + 30 <= 480, "must leave room for the title bar too"
 
     def test_shows_everything_when_the_screen_is_big_enough(self, gui):
@@ -592,10 +602,10 @@ class TestIconTableWindow:
         assert gui._icon_table_visible_height(100, 28) == ICON_TABLE_ROW_PITCH
 
     def test_more_rows_never_make_a_taller_window_than_the_screen_allows(self, gui):
-        from bedliftcontrol.gui import ICON_TABLE_PAD
+        from bedliftcontrol.gui import WINDOW_PAD
 
         for rows in (1, 28, 200):
-            assert gui._icon_table_visible_height(480, rows) + 2 * ICON_TABLE_PAD + 30 <= 480
+            assert gui._icon_table_visible_height(480, rows) + 2 * WINDOW_PAD + 30 <= 480
 
     def test_uses_a_scrollable_frame(self, gui):
         import customtkinter
@@ -644,10 +654,13 @@ class TestNoPromptBeforeMoving:
         monkeypatch.setattr(gui_module, "messagebox", fake)
         return fake
 
-    def test_lowering_from_the_top_asks_nothing(self, gui, controller, box):
+    def test_lowering_from_the_top_asks_nothing(self, gui, controller, box, elapsed):
+        """No dialog - the rope reminder rides on the countdown instead."""
         controller.at_top = True
         gui._on_down()
         assert not box.showinfo.called and not box.askokcancel.called
+        elapsed[0] += 30
+        gui._wait_before_move()
         controller.run_async.assert_called_once_with(controller.move_down)
 
     def test_raising_from_the_bottom_asks_nothing(self, gui, controller, box):
@@ -879,36 +892,28 @@ class TestLocationSelection:
         weather.current = weather.readings["phone"]
         return weather
 
-    def test_the_button_opens_the_window(self, gui):
-        gui._location_window()
-        assert "location" in gui._open_windows
-
-    def test_one_button_per_location(self, gui):
+    def test_the_dropdown_offers_every_location(self, gui):
         import customtkinter
 
         from bedliftcontrol.weather import LOCATIONS
 
-        customtkinter.CTkButton.reset_mock()
-        gui._location_window()
-        texts = [c.kwargs.get("text") for c in customtkinter.CTkButton.call_args_list]
-        for location in LOCATIONS:
-            assert location.label in texts
+        customtkinter.CTkOptionMenu.reset_mock()
+        gui._settings_window()
+        values = customtkinter.CTkOptionMenu.call_args.kwargs["values"]
+        assert values == [place.label for place in LOCATIONS]
 
-    def test_the_active_location_is_highlighted(self, gui, weather):
-        import customtkinter
-
-        from bedliftcontrol.gui import BUTTON_COLOR, BUTTON_DISABLED_COLOR
-
+    def test_the_dropdown_starts_on_the_selected_one(self, gui, weather):
         weather.selected = "lacure"
-        customtkinter.CTkButton.reset_mock()
-        gui._location_window()
-        colors = {
-            c.kwargs.get("text"): c.kwargs.get("fg_color")
-            for c in customtkinter.CTkButton.call_args_list
-            if "fg_color" in c.kwargs
-        }
-        assert colors["La Cure"] == BUTTON_COLOR
-        assert colors["Schilthorn"] == BUTTON_DISABLED_COLOR
+        gui._settings_window()
+        gui._location_menu.set.assert_called_once_with("La Cure")
+
+    def test_choosing_a_label_selects_its_location(self, gui, weather):
+        gui._on_location_chosen("Châtel")
+        weather.select.assert_called_once_with("chatel")
+
+    def test_an_unknown_label_changes_nothing(self, gui, weather):
+        gui._on_location_chosen("Gibt es nicht")
+        assert not weather.select.called
 
     def test_selecting_tells_the_service(self, gui, weather):
         gui._select_location("chatel")
@@ -918,11 +923,6 @@ class TestLocationSelection:
         gui._select_location("chatel")
         assert controller.config.weather_location == "chatel"
         controller.config.save.assert_called()
-
-    def test_selecting_closes_the_window(self, gui):
-        gui._location_window()
-        gui._select_location("chatel")
-        assert "location" not in gui._open_windows
 
     def test_selecting_applies_the_new_reading_at_once(self, gui, weather_with_readings):
         weather_with_readings.current = weather_with_readings.readings["schilthorn"]
@@ -1050,10 +1050,10 @@ class TestHistoryWindow:
         assert gui._format_visit(visit).startswith("kaputt")
 
     def test_the_window_fits_the_pi_panel(self, gui):
-        from bedliftcontrol.gui import ICON_TABLE_PAD
+        from bedliftcontrol.gui import WINDOW_PAD
 
         visible = gui._history_visible_height(480, 500)
-        assert visible + 2 * ICON_TABLE_PAD + 110 + 30 <= 480
+        assert visible + 2 * WINDOW_PAD + gui_module.HISTORY_HEADER_HEIGHT + 30 <= 480
 
 
 class FakeInverter:
@@ -1099,15 +1099,21 @@ class TestPowerButton:
         inverter = FakeInverter()
         return BedGui(controller, weather, inverter=inverter), inverter
 
-    def test_it_starts_showing_off(self, powered):
+    def test_it_starts_grey(self, powered):
         built, _ = powered
-        assert built.power_button.configure.call_args.kwargs["text"] == "230V aus"
+        assert built.power_button.configure.call_args.kwargs["fg_color"] == gui_module.POWER_OFF_COLOR
+
+    def test_the_label_never_changes(self, powered):
+        """The state is the colour; the text stays put."""
+        built, _ = powered
+        built._toggle_inverter()
+        assert "text" not in built.power_button.configure.call_args.kwargs
 
     def test_tapping_switches_it_on(self, powered):
         built, inverter = powered
         built._toggle_inverter()
         assert inverter.on is True
-        assert built.power_button.configure.call_args.kwargs["text"] == "230V ein"
+        assert built.power_button.configure.call_args.kwargs["fg_color"] == gui_module.POWER_ON_COLOR
 
     def test_tapping_again_switches_it_off(self, powered):
         built, inverter = powered
@@ -1172,37 +1178,41 @@ class TestInverterBeforeMoving:
         built.app.after.reset_mock()
         built._start_move(MoveContext.UP, controller.move_up)
         delays = [c.args[0] for c in built.app.after.call_args_list]
-        assert gui_module.INVERTER_WAIT_TICK_MS in delays
+        assert gui_module.COUNTDOWN_TICK_MS in delays
 
-    def test_the_move_starts_once_the_inverter_is_up(self, cold, controller):
+    def test_the_move_starts_once_the_inverter_is_up(self, cold, controller, elapsed):
         built, inverter = cold
         built._start_move(MoveContext.UP, controller.move_up)
         inverter.finish_starting()
-        built._wait_for_inverter()
+        elapsed[0] += 10
+        built._wait_before_move()
         controller.run_async.assert_called_once_with(controller.move_up)
 
-    def test_the_stop_button_says_stop_again_once_it_moves(self, cold, controller):
+    def test_the_stop_button_says_stop_again_once_it_moves(self, cold, controller, elapsed):
         built, inverter = cold
         built._start_move(MoveContext.UP, controller.move_up)
         inverter.finish_starting()
-        built._wait_for_inverter()
+        elapsed[0] += 10
+        built._wait_before_move()
         assert built.stop_button.configure.call_args.kwargs["text"] == "STOP"
 
-    def test_the_move_starts_only_once(self, cold, controller):
+    def test_the_move_starts_only_once(self, cold, controller, elapsed):
         """A tick that arrives after the movement already started must not start it twice."""
         built, inverter = cold
         built._start_move(MoveContext.UP, controller.move_up)
         inverter.finish_starting()
-        built._wait_for_inverter()
-        built._wait_for_inverter()
+        elapsed[0] += 10
+        built._wait_before_move()
+        built._wait_before_move()
         assert controller.run_async.call_count == 1
 
-    def test_stop_during_the_countdown_drops_the_move(self, cold, controller):
+    def test_stop_during_the_countdown_drops_the_move(self, cold, controller, elapsed):
         built, inverter = cold
         built._start_move(MoveContext.UP, controller.move_up)
         built._on_stop()
         inverter.finish_starting()
-        built._wait_for_inverter()
+        elapsed[0] += 10
+        built._wait_before_move()
         assert not controller.run_async.called
 
     def test_stop_during_the_countdown_does_not_stop_the_controller(self, cold, controller):
@@ -1342,14 +1352,14 @@ class TestPowerAfterMoving:
     def test_the_button_follows(self, running, controller, box):
         built, inverter = running
         self.arrive(built, controller, MoveContext.UP, at_top=True)
-        assert built.power_button.configure.call_args.kwargs["text"] == "230V aus"
+        assert built.power_button.configure.call_args.kwargs["fg_color"] == gui_module.POWER_OFF_COLOR
 
     def test_a_stop_in_between_leaves_it_running(self, running, controller, box):
         built, inverter = running
         self.arrive(built, controller, MoveContext.DOWN)
         assert inverter.on is True
 
-    def test_the_whole_round_trip(self, controller, weather, box):
+    def test_the_whole_round_trip(self, controller, weather, box, elapsed):
         """Down a bit, STOP, then all the way up: red throughout, off at the top."""
         inverter = FakeInverter()
         built = BedGui(controller, weather, inverter=inverter)
@@ -1358,24 +1368,26 @@ class TestPowerAfterMoving:
         controller.at_bottom = False
         built._start_move(MoveContext.DOWN, controller.move_down)
         inverter.finish_starting()
-        built._wait_for_inverter()
+        elapsed[0] += 30
+        built._wait_before_move()
         assert inverter.on is True
-        assert built.power_button.configure.call_args.kwargs["text"] == "230V ein"
+        assert built.power_button.configure.call_args.kwargs["fg_color"] == gui_module.POWER_ON_COLOR
 
         self.arrive(built, controller, MoveContext.DOWN)  # stopped half way
         assert inverter.on is True, "still hanging, the motors still need power"
 
         built._start_move(MoveContext.UP, controller.move_up)
-        built._wait_for_inverter()
+        elapsed[0] += 30
+        built._wait_before_move()
         self.arrive(built, controller, MoveContext.UP, at_top=True)
         assert inverter.on is False
-        assert built.power_button.configure.call_args.kwargs["text"] == "230V aus"
+        assert built.power_button.configure.call_args.kwargs["fg_color"] == gui_module.POWER_OFF_COLOR
 
     def test_an_inverter_that_is_already_off_is_left_alone(self, controller, weather, box):
         built = BedGui(controller, weather, inverter=FakeInverter())
         built.power_button.configure.reset_mock()
         self.arrive(built, controller, MoveContext.DOWN, at_bottom=True)
-        assert built.power_button.configure.call_args.kwargs["text"] == "230V aus"
+        assert built.power_button.configure.call_args.kwargs["fg_color"] == gui_module.POWER_OFF_COLOR
 
 
 class TestCountdownText:
@@ -1400,6 +1412,16 @@ class TestCountdownText:
         assert "Seile lösen!" in self.countdown(built)
         assert "230V" in self.countdown(built)
 
+    def test_once_mains_is_up_only_the_ropes_are_left(self, waiting, controller, elapsed):
+        built, inverter = waiting
+        controller.at_top = True
+        built._start_move(MoveContext.DOWN, controller.move_down)
+        inverter.finish_starting()
+        elapsed[0] += 7
+        built._wait_before_move()
+        assert "230V" not in self.countdown(built)
+        assert "Seile" in self.countdown(built)
+
     def test_raising_says_nothing_about_ropes(self, waiting, controller):
         built, _ = waiting
         controller.at_bottom = True
@@ -1415,16 +1437,250 @@ class TestCountdownText:
         built._start_move(MoveContext.DOWN, controller.move_down)
         assert "Seile" not in self.countdown(built)
 
-    def test_the_hint_is_gone_once_it_moves(self, waiting, controller):
+    def test_the_hint_is_gone_once_it_moves(self, waiting, controller, elapsed):
         built, inverter = waiting
         controller.at_top = True
         built._start_move(MoveContext.DOWN, controller.move_down)
         inverter.finish_starting()
-        built._wait_for_inverter()
+        elapsed[0] += 30
+        built._wait_before_move()
         assert self.countdown(built) == "STOP"
 
-    def test_it_counts_down(self, waiting, controller):
+    def test_it_counts_down(self, waiting, controller, elapsed):
         built, _ = waiting
         controller.at_top = True
         built._start_move(MoveContext.DOWN, controller.move_down)
-        assert "8s" in self.countdown(built), "7.2s rounds up"
+        first = self.countdown(built)
+        elapsed[0] += 5
+        built._wait_before_move()
+        assert self.countdown(built) != first
+
+
+class TestRopeDelay:
+    """Lowering from the top waits longer on purpose: the safety ropes have to come
+    off first, and that time is on top of the inverter's start-up."""
+
+    @pytest.fixture
+    def parked_up(self, controller, weather):
+        controller.at_top = True
+        controller.at_bottom = False
+        controller.config.inverter_startup_seconds = 10.0
+        controller.config.rope_delay_seconds = 10.0
+        inverter = FakeInverter(on=True, ready=True)  # mains already up: only ropes left
+        return BedGui(controller, weather, inverter=inverter), inverter
+
+    def test_lowering_from_the_top_waits(self, parked_up, controller):
+        built, _ = parked_up
+        built._start_move(MoveContext.DOWN, controller.move_down)
+        assert not controller.run_async.called
+
+    def test_and_starts_once_the_time_is_up(self, parked_up, controller, elapsed):
+        built, _ = parked_up
+        built._start_move(MoveContext.DOWN, controller.move_down)
+        elapsed[0] += 10
+        built._wait_before_move()
+        controller.run_async.assert_called_once_with(controller.move_down)
+
+    def test_it_is_not_up_a_second_too_early(self, parked_up, controller, elapsed):
+        built, _ = parked_up
+        built._start_move(MoveContext.DOWN, controller.move_down)
+        elapsed[0] += 9
+        built._wait_before_move()
+        assert not controller.run_async.called
+
+    def test_raising_never_waits_for_ropes(self, controller, weather, elapsed):
+        controller.at_bottom = True
+        controller.at_top = False
+        built = BedGui(controller, weather, inverter=FakeInverter(on=True, ready=True))
+        built._start_move(MoveContext.UP, controller.move_up)
+        controller.run_async.assert_called_once_with(controller.move_up)
+
+    def test_carrying_on_downwards_after_a_stop_never_waits(self, controller, weather):
+        """Half way down the ropes are long off."""
+        controller.at_top = False
+        controller.at_bottom = False
+        built = BedGui(controller, weather, inverter=FakeInverter(on=True, ready=True))
+        built._start_move(MoveContext.DOWN, controller.move_down)
+        controller.run_async.assert_called_once_with(controller.move_down)
+
+    def test_it_adds_to_the_inverter_start_up(self, controller, weather, elapsed):
+        """Ten seconds of mains plus ten of ropes is twenty, not ten."""
+        controller.at_top = True
+        controller.at_bottom = False
+        cold = FakeInverter()  # answers 7.2s until ready
+        built = BedGui(controller, weather, inverter=cold)
+        built._start_move(MoveContext.DOWN, controller.move_down)
+        cold.finish_starting()
+        elapsed[0] += 8
+        built._wait_before_move()
+        assert not controller.run_async.called, "the rope time still has to run"
+        elapsed[0] += 10
+        built._wait_before_move()
+        controller.run_async.assert_called_once_with(controller.move_down)
+
+    def test_zero_seconds_means_no_wait(self, controller, weather):
+        controller.at_top = True
+        controller.config.rope_delay_seconds = 0.0
+        built = BedGui(controller, weather, inverter=FakeInverter(on=True, ready=True))
+        built._start_move(MoveContext.DOWN, controller.move_down)
+        controller.run_async.assert_called_once_with(controller.move_down)
+
+    def test_stop_during_the_rope_time_drops_the_move(self, parked_up, controller, elapsed):
+        built, _ = parked_up
+        built._start_move(MoveContext.DOWN, controller.move_down)
+        built._on_stop()
+        elapsed[0] += 30
+        built._wait_before_move()
+        assert not controller.run_async.called
+
+
+class TestRopeDelaySetting:
+    @pytest.fixture
+    def settings(self, controller, weather):
+        import customtkinter
+
+        built = BedGui(controller, weather, inverter=FakeInverter())
+        customtkinter.CTkSlider.reset_mock()
+        built._settings_window()
+        return built
+
+    def test_the_slider_spans_zero_to_twenty(self, settings):
+        import customtkinter
+
+        bounds = [(c.kwargs.get("from_"), c.kwargs.get("to"))
+                  for c in customtkinter.CTkSlider.call_args_list]
+        assert (0.0, 20.0) in bounds
+
+    def test_it_snaps_to_whole_seconds(self, settings):
+        import customtkinter
+
+        steps = [c.kwargs.get("number_of_steps") for c in customtkinter.CTkSlider.call_args_list]
+        assert 20 in steps
+
+    def test_moving_it_stores_the_value(self, settings, controller):
+        settings._on_rope_delay_change(6.0)
+        assert controller.config.rope_delay_seconds == 6.0
+        controller.config.save.assert_called()
+
+    def test_the_value_is_shown(self, settings):
+        settings._on_rope_delay_change(6.0)
+        settings._rope_value_label.configure.assert_called_with(text="6 s")
+
+    def test_it_is_rounded_to_whole_seconds(self, settings, controller):
+        settings._on_rope_delay_change(6.7)
+        assert controller.config.rope_delay_seconds == 7.0
+
+    def test_the_two_delays_are_separate_settings(self, settings, controller):
+        settings._on_rope_delay_change(3.0)
+        settings._on_inverter_delay_change(12.0)
+        assert controller.config.rope_delay_seconds == 3.0
+        assert controller.config.inverter_startup_seconds == 12.0
+
+
+class TestWeekdayLabel:
+    def test_it_shows_the_day_of_the_reading(self, gui, weather):
+        from bedliftcontrol.weather import Weather
+
+        weather.current = Weather("Thun", 21.4, "Klar", "sun", "2026-09-23T11:00")
+        gui._refresh_weather()
+        gui.weather_day.configure.assert_any_call(text="Mi")
+
+    def test_it_is_blank_without_a_reading(self, gui, weather):
+        weather.current = None
+        gui._refresh_weather()
+        gui.weather_day.configure.assert_any_call(text="")
+
+
+class TestCloseButtons:
+    """A touch panel has no comfortable window decoration, so both windows that are
+    opened often carry their own close button."""
+
+    @staticmethod
+    def close_button(window_name):
+        import customtkinter
+
+        return [c for c in customtkinter.CTkButton.call_args_list
+                if c.kwargs.get("text") == "Schliessen"]
+
+    def test_the_settings_window_has_one(self, gui):
+        import customtkinter
+
+        customtkinter.CTkButton.reset_mock()
+        gui._settings_window()
+        assert self.close_button("settings")
+
+    def test_it_spans_the_three_buttons_above(self, gui):
+        import customtkinter
+
+        customtkinter.CTkButton.reset_mock()
+        gui._settings_window()
+        width = self.close_button("settings")[0].kwargs["width"]
+        assert width == gui_module.SETTINGS_ROW_WIDTH
+
+    def test_the_corrections_window_has_one(self, gui, controller):
+        import customtkinter
+
+        controller.at_bottom = True
+        customtkinter.CTkButton.reset_mock()
+        gui._corrections_window()
+        assert self.close_button("corrections")
+
+    def test_it_spans_both_correction_columns(self, gui):
+        import customtkinter
+
+        customtkinter.CTkButton.reset_mock()
+        gui._corrections_window()
+        width = self.close_button("corrections")[0].kwargs["width"]
+        assert width == gui_module.CORRECTION_ROW_WIDTH
+
+    def test_it_closes_the_settings_window(self, gui):
+        import customtkinter
+
+        customtkinter.CTkButton.reset_mock()
+        gui._settings_window()
+        assert "settings" in gui._open_windows
+        self.close_button("settings")[0].kwargs["command"]()
+        assert "settings" not in gui._open_windows
+
+    def test_it_closes_the_corrections_window(self, gui):
+        import customtkinter
+
+        customtkinter.CTkButton.reset_mock()
+        gui._corrections_window()
+        assert "corrections" in gui._open_windows
+        self.close_button("corrections")[0].kwargs["command"]()
+        assert "corrections" not in gui._open_windows
+
+    def test_it_is_big_enough_for_a_finger(self, gui):
+        import customtkinter
+
+        customtkinter.CTkButton.reset_mock()
+        gui._settings_window()
+        assert self.close_button("settings")[0].kwargs["height"] == gui_module.CLOSE_BUTTON_HEIGHT
+
+
+class TestWindowPlacement:
+    """Both windows open where the hand already is: right of the bar, at the top."""
+
+    @pytest.fixture
+    def positioned(self, gui):
+        gui.progress_frame.winfo_rootx.return_value = 12
+        gui.progress_frame.winfo_width.return_value = 48
+        return gui
+
+    def test_the_settings_window_sits_beside_the_bar(self, positioned):
+        positioned._settings_window()
+        window = positioned._open_windows["settings"]
+        assert window.geometry.call_args.args[0] == "+60+0"
+
+    def test_the_corrections_window_sits_beside_the_bar(self, positioned):
+        positioned._corrections_window()
+        window = positioned._open_windows["corrections"]
+        assert window.geometry.call_args.args[0] == "+60+0"
+
+    def test_the_size_is_set_before_the_position(self, positioned):
+        """geometry() with only a position keeps the size that was set before it."""
+        positioned._settings_window()
+        window = positioned._open_windows["settings"]
+        sizes = [c.args[0] for c in window.geometry.call_args_list]
+        assert sizes[0] == "520x390" and sizes[-1] == "+60+0"

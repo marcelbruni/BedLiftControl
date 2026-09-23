@@ -153,6 +153,15 @@ class Weather:
     fetched_at: str
     daily: list = field(default_factory=list)
 
+    @property
+    def weekday(self) -> str:
+        """Two letters for the day this reading belongs to, taken from its own
+        timestamp rather than from today - an old reading stays honest that way."""
+        try:
+            return _weekday_label(self.fetched_at[:10])
+        except (ValueError, IndexError):
+            return ""
+
     def to_dict(self) -> dict:
         return {
             "city": self.city,
