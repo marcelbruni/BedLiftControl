@@ -518,3 +518,40 @@ class TestWeekday:
 
         original = self.reading("2026-09-23T10:37")
         assert Weather.from_dict(original.to_dict()).weekday == "Mi"
+
+
+class TestDailyDescription:
+    """A day carries its text as well as its icon, so it can stand in for the current
+    conditions when the connection is gone."""
+
+    def test_the_parser_fills_it_in(self):
+        from bedliftcontrol.weather import _parse_daily
+
+        daily = _parse_daily({
+            "time": ["2026-09-23"],
+            "weathercode": [0],
+            "temperature_2m_max": [21.0],
+            "temperature_2m_min": [9.0],
+            "precipitation_probability_max": [10],
+        })
+        assert daily[0].description == "Klarer Himmel"
+
+    def test_it_survives_the_cache_round_trip(self):
+        from bedliftcontrol.weather import DailyForecast
+
+        day = DailyForecast("Mi", "2026-09-23", "sun", 21.0, 9.0, 10, "Klarer Himmel")
+        assert DailyForecast.from_dict(day.to_dict()).description == "Klarer Himmel"
+
+    def test_a_cache_written_before_it_existed_still_loads(self):
+        from bedliftcontrol.weather import DailyForecast
+
+        old = {"day": "Mi", "date": "2026-09-23", "icon": "sun",
+               "temp_max": 21.0, "temp_min": 9.0, "rain": 10}
+        assert DailyForecast.from_dict(old).description == ""
+
+
+class TestReadingDate:
+    def test_the_date_is_the_day_of_the_reading(self):
+        from bedliftcontrol.weather import Weather
+
+        assert Weather("Thun", 21.0, "Klar", "sun", "2026-09-23T10:37").date == "2026-09-23"

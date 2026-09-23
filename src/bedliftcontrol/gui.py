@@ -725,14 +725,32 @@ class BedGui:
 
     def _apply_weather(self) -> None:
         """Hand the selected reading to both blocks. Separate from the timer above so a
-        location change can apply immediately without starting a second timer chain."""
+        location change can apply immediately without starting a second timer chain.
+
+        Runs every few seconds, which is also what carries the panel over midnight: days
+        that are past drop out of the forecast, and a reading from yesterday gives way to
+        today's forecast. Both work offline - no fetch is involved.
+        """
         weather = self.weather.current
         if weather is None:
             self._show_reading_missing()
             return
-        self._update_current_panel(weather)
-        self._render_forecast(weather.daily)
-        self.weather_updated.configure(text="Stand: " + weather.fetched_at.replace("T", " "))
+        today = self._today()
+        daily = [day for day in weather.daily if day.date >= today]
+        stale = weather.date != today
+        forecast_today = daily[0] if daily and daily[0].date == today else None
+        if stale and forecast_today is not None:
+            self._update_current_panel_from_forecast(weather.city, forecast_today)
+            stamp = "Vorhersage, Stand: " + weather.fetched_at.replace("T", " ")
+        else:
+            self._update_current_panel(weather)
+            stamp = "Stand: " + weather.fetched_at.replace("T", " ")
+        self._render_forecast(daily)
+        self.weather_updated.configure(text=stamp)
+
+    def _today(self) -> str:
+        """Today as an ISO date, off the corrected clock rather than the machine one."""
+        return self.timesync.now().date().isoformat()
 
     def _show_reading_missing(self) -> None:
         """A location that has not been fetched yet must not keep showing the previous
@@ -804,7 +822,9 @@ class BedGui:
 
     def _build_current_panel(self, parent) -> None:
         self.current_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        self.current_frame.pack(fill="x", pady=(20, 0))
+        # expand, so the height a kiosk screen has over the window goes into the gaps
+        # between the blocks instead of piling up under the last one
+        self.current_frame.pack(fill="x", expand=True, pady=(20, 0))
         city_row = ctk.CTkFrame(self.current_frame, fg_color="transparent")
         city_row.pack()
         self.weather_city = ctk.CTkLabel(city_row, text="", font=ctk.CTkFont(size=22))
@@ -821,6 +841,18 @@ class BedGui:
         self.weather_desc = ctk.CTkLabel(self.current_frame, text="", font=ctk.CTkFont(size=16))
         self.weather_desc.pack()
 
+    def _update_current_panel_from_forecast(self, city: str, day) -> None:
+        """Yesterday's measurement is no longer "now". Once the connection is gone, the
+        forecast for today is the best thing left, so the block shows that instead - with
+        the day's high and low in place of a single temperature, because that is what a
+        forecast has.
+        """
+        self.weather_city.configure(text=city)
+        self.weather_day.configure(text=day.day)
+        self.weather_icon.show(day.icon)
+        self.weather_temp.configure(text=f"{round(day.temp_max)}° / {round(day.temp_min)}°")
+        self.weather_desc.configure(text=day.description)
+
     def _update_current_panel(self, weather) -> None:
         """Conditions right now - a point in time, not the day as a whole."""
         self.weather_city.configure(text=weather.city)
@@ -834,7 +866,7 @@ class BedGui:
 
     def _build_forecast_panel(self, parent) -> None:
         self.forecast_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        self.forecast_frame.pack(pady=(18, 0))
+        self.forecast_frame.pack(expand=True, pady=(18, 0))
 
     def _render_forecast(self, daily) -> None:
         key = [(day.date, day.icon, day.temp_max, day.temp_min, day.rain) for day in daily]

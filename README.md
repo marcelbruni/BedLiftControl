@@ -213,7 +213,15 @@ last readings stay visible when the connection drops.
 
 A refresh runs every 30 minutes, or every minute while it keeps failing, so the
 weather appears as soon as a connection does. The display re-reads the cached values
-every 5 seconds.
+every 5 seconds, and that is also what carries it over midnight - no fetch involved:
+
+- Days that are in the past drop out of the week row, so today is always the first
+  column. Offline the row simply gets shorter as the days run out.
+- A reading from a previous day is no longer "now", so the big block switches to today's
+  entry from the week instead, showing that day's high and low in place of the
+  measured temperature. The "Stand" line says "Vorhersage" while it does.
+- With neither a fresh reading nor a forecast for today, the last measurement stays on
+  screen with its own date - better than an empty panel.
 
 The IP lookup (ipapi.co) answers HTTP 429 after a few calls in quick succession. A
 failed lookup therefore keeps the last known position instead of dropping the phone

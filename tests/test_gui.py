@@ -52,6 +52,15 @@ def ctk_widgets(monkeypatch):
         getattr(customtkinter, name).side_effect = None
 
 
+FIXED_TODAY = "2026-09-03"
+
+
+@pytest.fixture(autouse=True)
+def frozen_today(monkeypatch):
+    """The panel rolls the forecast over at midnight, so "today" has to stand still."""
+    monkeypatch.setattr(gui_module.BedGui, "_today", lambda self: FIXED_TODAY)
+
+
 @pytest.fixture(autouse=True)
 def elapsed(monkeypatch):
     """The waiting clock, under test control: elapsed[0] += n skips n seconds."""
@@ -1684,3 +1693,91 @@ class TestWindowPlacement:
         window = positioned._open_windows["settings"]
         sizes = [c.args[0] for c in window.geometry.call_args_list]
         assert sizes[0] == "520x390" and sizes[-1] == "+60+0"
+
+
+class TestMidnightRollover:
+    """The panel has to survive a day change without a connection: the forecast rolls
+    over, and the big block falls back to today's forecast once the reading is stale."""
+
+    @staticmethod
+    def week(start_day=3):
+        from bedliftcontrol.weather import DailyForecast
+
+        names = ["Do", "Fr", "Sa", "So", "Mo", "Di", "Mi"]
+        return [
+            DailyForecast(names[index], f"2026-09-{start_day + index:02d}", "sun",
+                          20.0 + index, 9.0 + index, rain=10, description="Klarer Himmel")
+            for index in range(7)
+        ]
+
+    @staticmethod
+    def reading(fetched_at, daily):
+        from bedliftcontrol.weather import Weather
+
+        return Weather("Thun", 21.4, "Klar", "sun", fetched_at, daily=daily)
+
+    def columns(self, gui):
+        return [c.kwargs.get("text") for c in gui._forecast_labels
+                if hasattr(c, "kwargs")] or None
+
+    def test_today_is_the_first_column(self, gui, weather, monkeypatch):
+        weather.current = self.reading("2026-09-03T08:00", self.week())
+        gui._apply_weather()
+        rendered = gui._rendered_forecast_key
+        assert rendered[0][0] == "2026-09-03"
+        assert len(rendered) == 7
+
+    def test_a_day_later_the_first_column_is_dropped(self, gui, weather, monkeypatch):
+        monkeypatch.setattr(gui_module.BedGui, "_today", lambda self: "2026-09-04")
+        weather.current = self.reading("2026-09-03T08:00", self.week())
+        gui._apply_weather()
+        rendered = gui._rendered_forecast_key
+        assert rendered[0][0] == "2026-09-04"
+        assert len(rendered) == 6, "no new data offline, so the week grows shorter"
+
+    def test_a_week_later_nothing_is_left(self, gui, weather, monkeypatch):
+        monkeypatch.setattr(gui_module.BedGui, "_today", lambda self: "2026-09-20")
+        weather.current = self.reading("2026-09-03T08:00", self.week())
+        gui._apply_weather()
+        assert gui._rendered_forecast_key == []
+
+    def test_a_reading_from_today_is_shown_as_it_is(self, gui, weather):
+        weather.current = self.reading("2026-09-03T08:00", self.week())
+        gui._apply_weather()
+        gui.weather_temp.configure.assert_any_call(text="21°C")
+
+    def test_a_reading_from_yesterday_gives_way_to_the_forecast(self, gui, weather, monkeypatch):
+        monkeypatch.setattr(gui_module.BedGui, "_today", lambda self: "2026-09-04")
+        weather.current = self.reading("2026-09-03T08:00", self.week())
+        gui._apply_weather()
+        gui.weather_temp.configure.assert_any_call(text="21° / 10°")
+        gui.weather_day.configure.assert_any_call(text="Fr")
+        gui.weather_desc.configure.assert_any_call(text="Klarer Himmel")
+
+    def test_the_stale_panel_says_it_is_a_forecast(self, gui, weather, monkeypatch):
+        monkeypatch.setattr(gui_module.BedGui, "_today", lambda self: "2026-09-04")
+        weather.current = self.reading("2026-09-03T08:00", self.week())
+        gui._apply_weather()
+        stamp = gui.weather_updated.configure.call_args.kwargs["text"]
+        assert stamp.startswith("Vorhersage")
+
+    def test_a_fresh_reading_is_not_labelled_a_forecast(self, gui, weather):
+        weather.current = self.reading("2026-09-03T08:00", self.week())
+        gui._apply_weather()
+        stamp = gui.weather_updated.configure.call_args.kwargs["text"]
+        assert stamp.startswith("Stand:")
+
+    def test_without_a_forecast_for_today_the_old_reading_stays(self, gui, weather, monkeypatch):
+        """Better the last thing actually measured than an empty panel."""
+        monkeypatch.setattr(gui_module.BedGui, "_today", lambda self: "2026-09-20")
+        weather.current = self.reading("2026-09-03T08:00", self.week())
+        gui._apply_weather()
+        gui.weather_temp.configure.assert_any_call(text="21°C")
+
+    def test_the_rollover_needs_no_connection(self, gui, weather, monkeypatch):
+        """Nothing in the path asks the service for anything."""
+        monkeypatch.setattr(gui_module.BedGui, "_today", lambda self: "2026-09-05")
+        weather.current = self.reading("2026-09-03T08:00", self.week())
+        gui._apply_weather()
+        assert not weather.refresh_once.called
+        assert not weather.select.called

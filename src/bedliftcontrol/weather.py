@@ -121,6 +121,9 @@ class DailyForecast:
     temp_max: float
     temp_min: float
     rain: int | None = None
+    # kept alongside the icon so a day can stand in for the current conditions when
+    # the connection is gone and the last reading is from yesterday
+    description: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -130,6 +133,7 @@ class DailyForecast:
             "temp_max": self.temp_max,
             "temp_min": self.temp_min,
             "rain": self.rain,
+            "description": self.description,
         }
 
     @classmethod
@@ -141,6 +145,8 @@ class DailyForecast:
             temp_max=float(data["temp_max"]),
             temp_min=float(data["temp_min"]),
             rain=data.get("rain"),
+            # .get: a cache written before the descriptions existed is still usable
+            description=str(data.get("description", "")),
         )
 
 
@@ -154,11 +160,16 @@ class Weather:
     daily: list = field(default_factory=list)
 
     @property
+    def date(self) -> str:
+        """The day this reading belongs to, as an ISO date."""
+        return self.fetched_at[:10]
+
+    @property
     def weekday(self) -> str:
         """Two letters for the day this reading belongs to, taken from its own
         timestamp rather than from today - an old reading stays honest that way."""
         try:
-            return _weekday_label(self.fetched_at[:10])
+            return _weekday_label(self.date)
         except (ValueError, IndexError):
             return ""
 
@@ -204,7 +215,7 @@ def _parse_daily(daily_data: dict) -> list:
     count = min(len(times), len(codes), len(highs), len(lows), 7)
     forecast = []
     for i in range(count):
-        _, icon = describe_weather_code(int(codes[i]))
+        description, icon = describe_weather_code(int(codes[i]))
         rain = int(rains[i]) if i < len(rains) and rains[i] is not None else None
         forecast.append(
             DailyForecast(
@@ -214,6 +225,7 @@ def _parse_daily(daily_data: dict) -> list:
                 temp_max=float(highs[i]),
                 temp_min=float(lows[i]),
                 rain=rain,
+                description=description,
             )
         )
     return forecast
