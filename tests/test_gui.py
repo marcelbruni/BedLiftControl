@@ -1781,3 +1781,126 @@ class TestMidnightRollover:
         gui._apply_weather()
         assert not weather.refresh_once.called
         assert not weather.select.called
+
+
+class FakeUpdater:
+    def __init__(self, pending=0, succeeds=True):
+        self.pending = pending
+        self.succeeds = succeeds
+        self.applied = 0
+
+    @property
+    def update_available(self):
+        return self.pending > 0
+
+    def apply(self):
+        self.applied += 1
+        if self.succeeds:
+            self.pending = 0
+        return self.succeeds
+
+
+class TestUpdateButton:
+    """The button exists only while something is waiting on GitHub."""
+
+    @pytest.fixture
+    def waiting(self, controller, weather, monkeypatch):
+        monkeypatch.setattr(gui_module.os, "execv", MagicMock())
+        updater = FakeUpdater(pending=2)
+        built = BedGui(controller, weather, updater=updater)
+        return built, updater
+
+    def test_it_is_hidden_without_an_update(self, controller, weather):
+        built = BedGui(controller, weather, updater=FakeUpdater())
+        built.update_button.pack.reset_mock()
+        built._refresh_update_button()
+        built.update_button.pack_forget.assert_called()
+        assert not built.update_button.pack.called
+
+    def test_it_appears_once_there_is_one(self, waiting):
+        built, _ = waiting
+        built._refresh_update_button()
+        built.update_button.pack.assert_called()
+
+    def test_it_keeps_looking(self, waiting):
+        built, _ = waiting
+        built.app.after.reset_mock()
+        built._refresh_update_button()
+        delays = [c.args[0] for c in built.app.after.call_args_list]
+        assert gui_module.UPDATE_POLL_MS in delays
+
+    def test_pressing_it_pulls(self, waiting):
+        built, updater = waiting
+        built._run_update()
+        assert updater.applied == 1
+
+    def test_a_successful_update_restarts_the_app(self, waiting, monkeypatch):
+        built, _ = waiting
+        restarted = []
+        monkeypatch.setattr(built, "_restart", lambda: restarted.append(True))
+        built._update_finished(True)
+        assert restarted == [True]
+
+    def test_a_failed_update_says_so_and_keeps_the_button(self, waiting, monkeypatch):
+        built, _ = waiting
+        box = MagicMock()
+        monkeypatch.setattr(gui_module, "messagebox", box)
+        built._on_update()
+        built._update_finished(False)
+        box.showerror.assert_called_once()
+        assert built.update_button.configure.call_args.kwargs["state"] == "normal"
+
+    def test_it_will_not_pull_out_from_under_a_moving_bed(self, waiting, controller):
+        built, updater = waiting
+        controller.is_moving = True
+        built._on_update()
+        assert updater.applied == 0
+
+    def test_a_second_press_while_running_is_ignored(self, waiting, monkeypatch):
+        built, updater = waiting
+        monkeypatch.setattr(gui_module.threading, "Thread", MagicMock())
+        built._on_update()
+        built._on_update()
+        assert gui_module.threading.Thread.call_count == 1
+
+    def test_the_button_stays_put_while_the_update_runs(self, waiting, monkeypatch):
+        """pack_forget mid-update would make the button jump away under the finger."""
+        built, updater = waiting
+        monkeypatch.setattr(gui_module.threading, "Thread", MagicMock())
+        built._on_update()
+        updater.pending = 0
+        built.update_button.pack_forget.reset_mock()
+        built._refresh_update_button()
+        assert not built.update_button.pack_forget.called
+
+
+class TestRestart:
+    @pytest.fixture
+    def restarting(self, controller, weather, monkeypatch):
+        execv = MagicMock()
+        monkeypatch.setattr(gui_module.os, "execv", execv)
+        built = BedGui(controller, weather, inverter=FakeInverter(on=True, ready=True),
+                       updater=FakeUpdater())
+        return built, execv
+
+    def test_the_live_config_is_written_first(self, restarting, controller):
+        """The pull reset the checked-in file; the bed position must not go with it."""
+        built, _ = restarting
+        built._restart()
+        controller.config.save.assert_called()
+
+    def test_mains_is_switched_off(self, restarting):
+        built, _ = restarting
+        built._restart()
+        assert built.inverter.on is False
+
+    def test_the_pins_are_released(self, restarting, controller):
+        built, _ = restarting
+        built._restart()
+        controller.cleanup.assert_called_once()
+
+    def test_it_starts_the_same_entry_point_again(self, restarting):
+        built, execv = restarting
+        built._restart()
+        arguments = execv.call_args.args[1]
+        assert arguments[1:] == ["-m", "bedliftcontrol.main"]

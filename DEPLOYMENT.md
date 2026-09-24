@@ -279,8 +279,19 @@ danach also direkt im Vollbild.
 
 ## Update
 
-Wenn das Projekt bereits per git auf dem Pi liegt und am Entwicklungsrechner
-Änderungen gepusht wurden:
+**Der einfache Weg ist der Update-Knopf in der App.** Sobald der Pi Internet hat
+und auf GitHub neuere Commits liegen, erscheint in der unteren Leiste ein blauer
+Knopf **„Update"**. Ein Druck darauf holt den neuen Stand und startet die App
+neu. Die Bettposition bleibt dabei erhalten — die App schreibt sie nach dem
+Pull aus dem Speicher zurück, das Bett muss also **nicht** vorher hochgefahren
+werden.
+
+Der Knopf führt nur die beiden git-Schritte aus. Das Terminal brauchst du noch,
+wenn sich die Abhängigkeiten geändert haben (neue Zeile in `requirements.txt`),
+wenn der Knopf einen Fehler meldet, oder wenn gar keine App mehr startet.
+
+Der Weg über das Terminal, wenn das Projekt bereits per git auf dem Pi liegt und
+am Entwicklungsrechner Änderungen gepusht wurden:
 
 > ⚠️ Auch hier gilt: **Bett vorher ganz hochfahren.** Die Zeile
 > `git checkout -- data/config.json` setzt `position_steps` auf den
@@ -342,4 +353,6 @@ cp /tmp/config.bak data/config.json
 | `↑↓`-Button ist ausgegraut | Kein Fehler. Korrekturen gehen nur, wenn das Bett ganz oben oder ganz unten steht und nichts fährt. Nach einem Stopp auf halber Höhe erst bis zum Anschlag weiterfahren. |
 | Beide Pfeile aktiv, Prozentanzeige zeigt einen Zwischenwert | Kein Fehler. Das Bett steht dort, wo zuletzt STOP gedrückt wurde. Ein Pfeil fährt den Restweg, der andere zurück zum Ausgangspunkt. |
 | Ein Korrekturmotor läuft beim Gedrückthalten nicht | Er stoppt nach `CORRECTION_HOLD_MAX_STEPS` (8000 Schritte, rund 10 s) als Sicherung. Taste loslassen und neu drücken. |
+| Update-Knopf erscheint nie | Kein Internet, oder der Ordner ist kein git-Klon (dann fehlt `.git`, siehe Erstinstallation). Prüfen mit `cd ~/BedLiftControl && git fetch && git status`. |
+| Update-Knopf meldet einen Fehler | Log ansehen: meist sind andere getrackte Dateien lokal geändert, dann verweigert `git pull --ff-only`. Über das Terminal aufräumen und erneut pullen. |
 | Uhr zeigt eine falsche Zeit | Log prüfen: `Time synced, machine clock is off by …` zeigt die gemessene Abweichung. Fehlt die Zeile, war kein Internet da — dann läuft die Uhr mit der Maschinenzeit weiter, siehe Schritt 12. |

@@ -40,6 +40,7 @@ BedLiftControl/
 │       ├── inverter.py      # 230V inverter, switched over its remote contact
 │       ├── main.py          # Entry point
 │       ├── timesync.py      # Keeps the shown clock right when the Pi's is not
+│       ├── update.py        # Checks GitHub and installs with git
 │       └── weather.py       # Location, forecast and the WMO code table
 ├── tests/
 ├── DEPLOYMENT.md
@@ -260,6 +261,22 @@ well, once it is off by two seconds or more.
 NTP does the same job better whenever it works — this is the fallback for the time
 before the first NTP sync and for networks that block UDP 123, which phone
 tethering and public WiFi often do.
+
+## Updates
+
+A background check asks GitHub every 30 minutes whether the checkout is behind its
+remote branch (`git fetch` plus `git rev-list --count HEAD..@{u}`), and every 5 minutes
+while that fails - so the button turns up shortly after a connection comes back.
+
+When there is something to install, an "Update" button appears in the bottom bar.
+Pressing it discards the checked-in `data/config.json`, fast-forwards, writes the live
+config back and restarts the process with `os.execv`. Writing the config back is what
+keeps the bed position, the location and the delays across an update - without it, the
+pull would reset them to the committed values.
+
+The button is refused while the bed is moving, and only the two git steps are run: the
+app is an editable install, so a pull is enough for code changes. A release that changes
+the dependencies still needs the terminal, see [DEPLOYMENT.md](DEPLOYMENT.md#update).
 
 ## Kiosk mode
 

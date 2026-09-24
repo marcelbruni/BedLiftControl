@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import sys
+import threading
 import time
 import tkinter
 from datetime import datetime
@@ -23,6 +25,7 @@ from bedliftcontrol.config import (
 from bedliftcontrol.controller import BedController
 from bedliftcontrol.inverter import Inverter
 from bedliftcontrol.timesync import TimeSync
+from bedliftcontrol.update import UpdateChecker
 from bedliftcontrol.weather import LOCATIONS, WEATHER_CODES, WeatherService, location_or_default
 
 logger = logging.getLogger(__name__)
@@ -67,8 +70,11 @@ COUNTDOWN_TICK_MS = 250
 COUNTDOWN_FONT_SIZE = 22  # the countdown is short lines, not one word
 POWER_ON_COLOR = "#c62828"  # red while mains is live: a warning, not a status
 POWER_OFF_COLOR = "#555555"
+UPDATE_BUTTON_WIDTH = 90
+UPDATE_BUTTON_COLOR = "#1f6aa5"  # blue: neither a warning nor a running motor
 
 POLL_INTERVAL_MS = 100
+UPDATE_POLL_MS = 5000  # the checker runs in a thread; the bar reads its result here
 WEATHER_UI_REFRESH_MS = 5000
 CLOCK_TICK_MS = 1000  # the display shows seconds, so it has to tick once a second
 FORECAST_COL_WIDTH = 50
@@ -123,16 +129,19 @@ class MoveContext(Enum):
 
 class BedGui:
     def __init__(self, controller: BedController, weather: WeatherService,
-                 timesync: TimeSync | None = None, history=None, inverter=None):
+                 timesync: TimeSync | None = None, history=None, inverter=None,
+                 updater=None):
         self.controller = controller
         self.weather = weather
         self.history = history
         self.inverter = inverter if inverter is not None else Inverter()
+        self.updater = updater if updater is not None else UpdateChecker()
         # own default so existing callers keep working; it touches no network until started
         self.timesync = timesync if timesync is not None else TimeSync()
         self._move_context: MoveContext | None = None
         self._pending_move = None
         self._wait_timer = None
+        self._updating = False
         self._wait_until = 0.0
         self._bar_fill_level = 0.0
         self._clock_text = None
@@ -169,6 +178,10 @@ class BedGui:
         self.power_button = ctk.CTkButton(bottom, text="230V", width=BAR_BUTTON_WIDTH,
                                           command=self._toggle_inverter)
         self.power_button.pack(side="left", padx=4, pady=6)
+        # built here, shown only once an update is actually waiting
+        self.update_button = ctk.CTkButton(bottom, text="Update", width=UPDATE_BUTTON_WIDTH,
+                                           fg_color=UPDATE_BUTTON_COLOR,
+                                           command=self._on_update)
         self._build_clock_panel(bottom)
 
         # left vertical bar: empty when the bed is up, fills from the top down as the
@@ -221,6 +234,7 @@ class BedGui:
         self._update_power_button()
         self._set_bar(self.controller.position_fraction)
         self._update_clock()
+        self._refresh_update_button()
         self._refresh_weather()
         self._apply_window_mode()
 
@@ -367,6 +381,48 @@ class BedGui:
         self._update_move_buttons()
         self._update_corrections_button()
         self._update_power_button()
+
+    def _refresh_update_button(self) -> None:
+        """The button only exists while there is something to install."""
+        if self.updater.update_available and not self._updating:
+            self.update_button.pack(side="left", padx=4, pady=6)
+        elif not self._updating:
+            self.update_button.pack_forget()
+        self.app.after(UPDATE_POLL_MS, self._refresh_update_button)
+
+    def _on_update(self) -> None:
+        # pulling out from under a moving bed would leave the position unwritten
+        if self.controller.is_moving or self._updating:
+            return
+        self._updating = True
+        self.update_button.configure(text="läuft…", state="disabled")
+        threading.Thread(target=self._run_update, daemon=True).start()
+
+    def _run_update(self) -> None:
+        """The pull can take a moment on a phone connection, so it runs off the UI."""
+        succeeded = self.updater.apply()
+        self.app.after(0, lambda: self._update_finished(succeeded))
+
+    def _update_finished(self, succeeded: bool) -> None:
+        self._updating = False
+        if not succeeded:
+            self.update_button.configure(text="Update", state="normal")
+            messagebox.showerror("Update", "Update fehlgeschlagen. Details im Log.")
+            return
+        self._restart()
+
+    def _restart(self) -> None:
+        """Replace the process with a fresh one of the just pulled version.
+
+        The config is written first: the pull reset the checked-in file, and the live
+        values - bed position above all - are the ones that must survive.
+        """
+        self.controller.config.save()
+        self.inverter.turn_off()
+        self.controller.cleanup()
+        self.app.destroy()
+        logger.info("Restarting into the updated version")
+        os.execv(sys.executable, [sys.executable, "-m", "bedliftcontrol.main"])
 
     def _schedule_poll(self) -> None:
         self.app.after(POLL_INTERVAL_MS, self._poll_movement)
