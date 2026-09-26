@@ -51,25 +51,51 @@ Warten, bis die grüne LED aus bleibt, dann das Netzteil ziehen.
 
 ## Schritt 2: Die drei Pins finden
 
-Auf der 40-poligen Stiftleiste, an der Ecke mit Pin 1 (die Ecke, die der
-SD-Karte am nächsten liegt; Pin 1 ist auf der Platine markiert):
+Die Stiftleiste hat **40 Pins** in zwei Reihen. Gebraucht werden drei davon,
+alle im oberen Drittel. Pin 1 liegt an der Ecke, die der SD-Karte am nächsten
+ist, und ist auf der Platine markiert:
 
 ```
-             +-------+
-      3.3V   | 1   2 |  5V        ← Pin 2  → DC+
-     GPIO2   | 3   4 |  5V
-     GPIO3   | 5   6 |  GND       ← Pin 6  → DC-
-     GPIO4   | 7   8 |  GPIO14
-       GND   | 9  10 |  GPIO15
-    GPIO17   |11  12 |  GPIO18    ← Pin 11 → IN
-    GPIO27   |13  14 |  GND         (Pin 13 bis 18: Motoren, belegt)
-    GPIO22   |15  16 |  GPIO23
-      3.3V   |17  18 |  GPIO24
-             +-------+
+                             +---------+
+       DC+   Relais →     5V | 2     1 | 3V3
+    (oder hier DC+) →     5V | 4     3 | GPIO2
+       DC−   Relais →    GND | 6     5 | GPIO3
+                      GPIO14 | 8     7 | GPIO4
+                      GPIO15 |10     9 | GND    ← Motor −DIR
+                      GPIO18 |12    11 | GPIO17 ← Relais IN
+         Motor −DIR →    GND |14    13 | GPIO27 ← front PUL
+           back DIR → GPIO23 |16    15 | GPIO22 ← front DIR
+           back PUL → GPIO24 |18    17 | 3V3
+         Motor −PUL →    GND |20    19 | GPIO10
+                      GPIO25 |22    21 | GPIO9
+                       GPIO8 |24    23 | GPIO11
+                       GPIO7 |26    25 | GND    ← Motor −PUL
+                       ID_SC |28    27 | ID_SD
+                         GND |30    29 | GPIO5
+                      GPIO12 |32    31 | GPIO6
+                         GND |34    33 | GPIO13
+                      GPIO16 |36    35 | GPIO19
+                      GPIO20 |38    37 | GPIO26
+                      GPIO21 |40    39 | GND
+                             +---------+
 ```
 
-Die vier Motorleitungen sitzen direkt darunter auf den Pins 13, 15, 16 und 18.
-Verzähl dich nicht — Pin 11 ist der sechste auf der ungeraden Seite.
+So gezeichnet, wie du im Fahrzeug auf die Leiste schaust: die geraden Pins
+links, die ungeraden rechts.
+
+Die Motoren belegen **acht** Pins: vier Signale (front PUL/DIR rechts, back
+PUL/DIR links) und vier Rückleiter auf GND-Pins (9, 14, 20 und 25). Alles
+andere ist frei.
+
+**Zum Abzählen auf einem Breakout-Board**, wo die Beschriftung oft winzig ist:
+die Motoradern sind der Anker. In der rechten Reihe sind die Pins 9, 13 und 15
+belegt — **GPIO 17 ist der einzige freie Pin mittendrin**, zwischen dem GND mit
+dem Rückleiter und der ersten Front-Ader. Ein Pin daneben und du sitzt auf einer
+Motorleitung, das merkst du sofort.
+
+DC+ und DC− liegen in der anderen Reihe ganz oben: die **ersten beiden** Pins
+sind 5V, der **dritte** ist GND und der einzige GND dieser Reihe, der noch frei
+ist. Findest du diese Muster nicht, hast du vom falschen Ende gezählt.
 
 ## Schritt 3: Modul mit dem Pi verbinden
 
@@ -163,6 +189,8 @@ Fernbedienung.
    dann „Seile lösen!" statt „230V startet".
 4. Während der Fahrt ist der 230V-Knopf ausgegraut — mitten in der Fahrt die
    Motoren stromlos zu machen würde die gespeicherte Bettposition verfälschen.
+   Dasselbe gilt für das Korrekturfenster (↑↓): es schaltet 230V beim Öffnen
+   ein und beim Schliessen wieder aus, die Korrekturtasten fahren ja Motoren.
 5. Bis zum Anschlag fahren lassen. Unten geht das 230V von selbst wieder aus,
    oben erst, wenn du das Popup „Sicherungsseile anbringen!" mit OK bestätigt
    hast. Der Knopf wird in beiden Fällen wieder grau.
@@ -180,5 +208,4 @@ Fernbedienung.
 | Nach einem Neustart ist der Wechselrichter aus | Kein Fehler, so gewollt. Der Zustand wird bewusst nicht gespeichert; unbeaufsichtigt 230V einzuschalten wäre die schlechtere Voreinstellung. |
 | Bett fährt trotz Countdown nicht los | Countdown abgelaufen? Im Log steht `Inverter switched on, ready in 10s`. Fehlt die Zeile, kam der Aufruf nicht an — dann ist das Modul nicht an GPIO 17. |
 | Der Anlauf dauert länger oder kürzer als 10 Sekunden | ⚙ → **230V Anlauf**, Schieberegler zwischen 0 und 15 Sekunden. |
-| Das Bett soll ohne automatisches Einschalten fahren | ⚙ → **230V-Automatik ausschalten**. Der 230V-Knopf bleibt davon unberührt. |
 | Wechselrichter startet sporadisch nicht mehr, Relais klickt aber | Nach Jahren möglich: der Kontakt schaltet fast stromlos und kann eine dünne Oxidschicht ansetzen. Modul tauschen, oder eines mit vergoldeten Kontakten nehmen. |

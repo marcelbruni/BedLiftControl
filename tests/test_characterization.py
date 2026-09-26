@@ -365,15 +365,26 @@ class TestCorrections:
         getattr(controller, method)()
         assert controller.config.position_steps == 7
 
-    def test_up_and_down_are_opposite(self, controller, gpio):
-        controller.correct_front_up()
-        up_directions = [c for c in gpio.output.call_args_list
-                         if c.args[0] == Pins.FRONT_DIR.value]
+    @pytest.mark.parametrize("side", ["front", "back"])
+    def test_up_and_down_are_opposite(self, controller, gpio, side):
+        """Whichever way round a motor is wired, its two buttons must disagree."""
+        getattr(controller, f"correct_{side}_up")()
+        pin = Pins.FRONT_DIR if side == "front" else Pins.BACK_DIR
+        up_directions = [c for c in gpio.output.call_args_list if c.args[0] == pin.value]
         gpio.reset_mock()
-        controller.correct_front_down()
-        down_directions = [c for c in gpio.output.call_args_list
-                           if c.args[0] == Pins.FRONT_DIR.value]
+        getattr(controller, f"correct_{side}_down")()
+        down_directions = [c for c in gpio.output.call_args_list if c.args[0] == pin.value]
         assert up_directions[0].args[1] != down_directions[0].args[1]
+
+    def test_both_motors_take_the_same_direction_for_the_same_button(self, controller, gpio):
+        controller.correct_front_up()
+        front = [c.args[1] for c in gpio.output.call_args_list
+                 if c.args[0] == Pins.FRONT_DIR.value][0]
+        gpio.reset_mock()
+        controller.correct_back_up()
+        back = [c.args[1] for c in gpio.output.call_args_list
+                if c.args[0] == Pins.BACK_DIR.value][0]
+        assert front == back
 
 
 class TestCorrectionRamp:

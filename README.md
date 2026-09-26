@@ -173,6 +173,9 @@ before the motors turn — the inverter's output is not stable the instant the c
 closes. The wait is shown as a countdown on the STOP button, and STOP during the
 countdown drops the movement while leaving the inverter running.
 
+The correction window does the same in miniature: mains comes on when it opens and off
+when it closes, because those buttons drive the motors too.
+
 A movement that reaches an end stop switches it off again: at the bottom silently, at the
 top after the "Sicherungsseile anbringen!" prompt is acknowledged — the motors hold the
 bed while the ropes go on. A movement stopped half way leaves it running, because the bed

@@ -320,12 +320,13 @@ class BedGui:
         self._set_enabled(self.up_button, False)
         self._set_enabled(self.down_button, False)
         self._set_enabled(self.corrections_button, False)
-        # the bed is about to leave its end stop, so a correction window still standing
-        # open would be aimed at a position that no longer exists
-        self._on_window_closed("corrections")
-        self._show_stop_button()
         self._move_context = context
         self._pending_move = action
+        # the bed is about to leave its end stop, so a correction window still standing
+        # open would be aimed at a position that no longer exists. Closed after the
+        # pending move is set, so it does not take mains down with it.
+        self._on_window_closed("corrections")
+        self._show_stop_button()
         self.inverter.turn_on()
         self._update_power_button()
         self._wait_until = _now() + self.inverter.seconds_until_ready + self._rope_delay(context)
@@ -537,6 +538,7 @@ class BedGui:
             # the buttons are about to be destroyed, so no release event is coming
             self._cancel_correction_timer()
             self._end_correction_hold()
+            self._release_corrections_power()
         if window is not None:
             window.destroy()
 
@@ -645,7 +647,19 @@ class BedGui:
     def _corrections_window(self) -> None:
         self._toggle_window("corrections", self._build_corrections_window)
 
+    def _release_corrections_power(self) -> None:
+        """Mains came on with the window and goes off with it - unless a movement is
+        starting, which needs it and switches it off itself at the end stop."""
+        if self.controller.is_moving or self._pending_move is not None:
+            return
+        if self.inverter.turn_off():
+            self._update_power_button()
+
     def _build_corrections_window(self):
+        # the corrections drive the motors, so mains comes on with the window; by the
+        # time a button is aimed at, the inverter has had its start-up
+        self.inverter.turn_on()
+        self._update_power_button()
         window = ctk.CTkToplevel(self.app)
         window.title("Corrections")
         window.geometry("320x350")

@@ -1904,3 +1904,57 @@ class TestRestart:
         built._restart()
         arguments = execv.call_args.args[1]
         assert arguments[1:] == ["-m", "bedliftcontrol.main"]
+
+
+class TestCorrectionsPower:
+    """The correction buttons drive motors, so mains follows the window."""
+
+    @pytest.fixture
+    def gui_with_power(self, controller, weather):
+        controller.at_bottom = True
+        controller.at_top = False
+        inverter = FakeInverter()
+        return BedGui(controller, weather, inverter=inverter), inverter
+
+    def test_opening_switches_it_on(self, gui_with_power):
+        built, inverter = gui_with_power
+        built._corrections_window()
+        assert inverter.on is True
+
+    def test_the_button_shows_it(self, gui_with_power):
+        built, _ = gui_with_power
+        built._corrections_window()
+        assert built.power_button.configure.call_args.kwargs["fg_color"] == gui_module.POWER_ON_COLOR
+
+    def test_closing_switches_it_off(self, gui_with_power):
+        built, inverter = gui_with_power
+        built._corrections_window()
+        built._corrections_window()
+        assert inverter.on is False
+
+    def test_closing_updates_the_button(self, gui_with_power):
+        built, _ = gui_with_power
+        built._corrections_window()
+        built._on_window_closed("corrections")
+        assert built.power_button.configure.call_args.kwargs["fg_color"] == gui_module.POWER_OFF_COLOR
+
+    def test_a_starting_movement_does_not_take_mains_down(self, gui_with_power, controller):
+        """The window is closed when a movement starts - but that movement needs power."""
+        built, inverter = gui_with_power
+        built._corrections_window()
+        built._start_move(MoveContext.UP, controller.move_up)
+        assert inverter.on is True
+
+    def test_mains_is_left_alone_while_the_motors_run(self, gui_with_power, controller):
+        built, inverter = gui_with_power
+        built._corrections_window()
+        controller.is_moving = True
+        built._on_window_closed("corrections")
+        assert inverter.on is True
+
+    def test_closing_another_window_changes_nothing(self, gui_with_power):
+        built, inverter = gui_with_power
+        built._corrections_window()
+        built._settings_window()
+        built._on_window_closed("settings")
+        assert inverter.on is True
