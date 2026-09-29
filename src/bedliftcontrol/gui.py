@@ -45,7 +45,6 @@ STOP_FONT_SIZE = 40
 BUTTON_COLOR = "#2fa572"
 BUTTON_DISABLED_COLOR = "#333333"
 STOP_BUTTON_COLOR = "#c62828"
-STOP_BUTTON_HOVER_COLOR = "#8e1f1f"
 CORRECTION_BUTTON_WIDTH = 110
 CORRECTION_BUTTON_HEIGHT = 90
 # from the left edge of the left button to the right edge of the right one
@@ -143,6 +142,7 @@ class BedGui:
         self._wait_timer = None
         self._updating = False
         self._wait_until = 0.0
+        self._stop_button_text = "STOP"
         self._bar_fill_level = 0.0
         self._clock_text = None
         self._kiosk_button = None
@@ -171,17 +171,17 @@ class BedGui:
         bottom = ctk.CTkFrame(self.app, corner_radius=0)
         bottom.pack(side="bottom", fill="x")
         ctk.CTkButton(bottom, text="⚙", width=BAR_ICON_WIDTH,
-                      command=self._settings_window).pack(side="left", padx=4, pady=6)
+                      command=self._settings_window, hover=False).pack(side="left", padx=4, pady=6)
         self.corrections_button = ctk.CTkButton(bottom, text="↑↓", width=BAR_ICON_WIDTH,
-                                                command=self._corrections_window)
+                                                command=self._corrections_window, hover=False)
         self.corrections_button.pack(side="left", padx=4, pady=6)
         self.power_button = ctk.CTkButton(bottom, text="230V", width=BAR_BUTTON_WIDTH,
-                                          command=self._toggle_inverter)
+                                          command=self._toggle_inverter, hover=False)
         self.power_button.pack(side="left", padx=4, pady=6)
         # built here, shown only once an update is actually waiting
         self.update_button = ctk.CTkButton(bottom, text="Update", width=UPDATE_BUTTON_WIDTH,
                                            fg_color=UPDATE_BUTTON_COLOR,
-                                           command=self._on_update)
+                                           command=self._on_update, hover=False)
         self._build_clock_panel(bottom)
 
         # left vertical bar: empty when the bed is up, fills from the top down as the
@@ -216,17 +216,18 @@ class BedGui:
         self.control_frame = ctk.CTkFrame(self.app)
         self.control_frame.pack(side="right", fill="y", padx=10, pady=10)
         arrow_font = ctk.CTkFont(size=ARROW_FONT_SIZE)
-        self.up_button = ctk.CTkButton(self.control_frame, text="↑", font=arrow_font, width=180, command=self._on_up)
+        self.up_button = ctk.CTkButton(self.control_frame, text="↑", font=arrow_font, width=180, command=self._on_up, hover=False)
         self.up_button.pack(side="top", fill="both", expand=True, pady=(0, 5))
-        self.down_button = ctk.CTkButton(self.control_frame, text="↓", font=arrow_font, width=180, command=self._on_down)
+        self.down_button = ctk.CTkButton(self.control_frame, text="↓", font=arrow_font, width=180, command=self._on_down, hover=False)
         self.down_button.pack(side="bottom", fill="both", expand=True)
+        # built once: a new CTkFont on every countdown tick makes the button flicker
+        self._stop_font = ctk.CTkFont(size=STOP_FONT_SIZE, weight="bold")
+        self._countdown_font = ctk.CTkFont(size=COUNTDOWN_FONT_SIZE, weight="bold")
         # built once and placed over both arrows while a movement runs
         self.stop_button = ctk.CTkButton(
             self.control_frame, text="STOP",
-            font=ctk.CTkFont(size=STOP_FONT_SIZE, weight="bold"), width=180,
-            fg_color=STOP_BUTTON_COLOR, hover_color=STOP_BUTTON_HOVER_COLOR,
-            command=self._on_stop,
-        )
+            font=self._stop_font, width=180,
+            fg_color=STOP_BUTTON_COLOR, command=self._on_stop, hover=False)
 
         # initial state reflects the stored position
         self._update_move_buttons()
@@ -348,12 +349,12 @@ class BedGui:
         remaining = self._wait_until - _now()
         if remaining <= 0:
             action, self._pending_move = self._pending_move, None
-            self._set_stop_button_text("STOP", STOP_FONT_SIZE)
+            self._set_stop_button_text("STOP", self._stop_font)
             self.controller.run_async(action)
             self._schedule_poll()
             return
         self._set_stop_button_text(self._countdown_text(math.ceil(remaining)),
-                                   COUNTDOWN_FONT_SIZE)
+                                   self._countdown_font)
         self._wait_timer = self.app.after(COUNTDOWN_TICK_MS, self._wait_before_move)
 
     def _countdown_text(self, seconds: int) -> str:
@@ -366,8 +367,13 @@ class BedGui:
             text += "\n\nSeile lösen!"
         return text
 
-    def _set_stop_button_text(self, text: str, size: int) -> None:
-        self.stop_button.configure(text=text, font=ctk.CTkFont(size=size, weight="bold"))
+    def _set_stop_button_text(self, text: str, font) -> None:
+        """Only on a real change: the countdown ticks four times a second, and
+        rewriting the same text each time makes the button blink."""
+        if text == self._stop_button_text:
+            return
+        self._stop_button_text = text
+        self.stop_button.configure(text=text, font=font)
 
     def _cancel_pending_move(self) -> None:
         """STOP during the start-up: the movement is dropped, the inverter keeps running.
@@ -376,7 +382,7 @@ class BedGui:
         if self._wait_timer is not None:
             self.app.after_cancel(self._wait_timer)
             self._wait_timer = None
-        self._set_stop_button_text("STOP", STOP_FONT_SIZE)
+        self._set_stop_button_text("STOP", self._stop_font)
         self._hide_stop_button()
         self._move_context = None
         self._update_move_buttons()
@@ -546,7 +552,7 @@ class BedGui:
         """Closing by the window decoration is a small target on a touch panel."""
         button = ctk.CTkButton(parent, text="Schliessen", width=width,
                                height=CLOSE_BUTTON_HEIGHT,
-                               command=lambda: self._on_window_closed(name))
+                               command=lambda: self._on_window_closed(name), hover=False)
         button.grid(row=row, column=0, columnspan=columnspan, padx=12, pady=(12, 0))
         return button
 
@@ -583,19 +589,19 @@ class BedGui:
         ctk.CTkLabel(content, text="Ort").grid(row=4, column=0, padx=12, pady=12, sticky="e")
         self._location_menu = ctk.CTkOptionMenu(
             content, width=LOCATION_MENU_WIDTH, values=[place.label for place in LOCATIONS],
-            command=self._on_location_chosen)
+            command=self._on_location_chosen, hover=False)
         self._location_menu.set(location_or_default(self.weather.selected).label)
         self._location_menu.grid(row=4, column=1, padx=12, pady=12, sticky="w")
 
         buttons = ctk.CTkFrame(content, fg_color="transparent")
         buttons.grid(row=5, column=0, columnspan=3, padx=12, pady=(16, 0))
         self._kiosk_button = ctk.CTkButton(buttons, text=self._kiosk_button_text(),
-                                           width=KIOSK_BUTTON_WIDTH, command=self._toggle_kiosk)
+                                           width=KIOSK_BUTTON_WIDTH, command=self._toggle_kiosk, hover=False)
         self._kiosk_button.pack(side="left", padx=(0, 8))
         ctk.CTkButton(buttons, text="Wetter-Icons", width=SETTINGS_BUTTON_WIDTH,
-                      command=self._weather_icons_window).pack(side="left", padx=8)
+                      command=self._weather_icons_window, hover=False).pack(side="left", padx=8)
         ctk.CTkButton(buttons, text="Historie", width=SETTINGS_BUTTON_WIDTH,
-                      command=self._history_window).pack(side="left", padx=(8, 0))
+                      command=self._history_window, hover=False).pack(side="left", padx=(8, 0))
         self._add_close_button(content, row=6, width=SETTINGS_ROW_WIDTH,
                                name="settings", columnspan=3)
         self._place_beside_the_bar(window)
@@ -677,7 +683,7 @@ class BedGui:
         ]
         for text, row, column, click_action, hold_action in buttons:
             button = ctk.CTkButton(content, text=text, width=CORRECTION_BUTTON_WIDTH,
-                                   height=CORRECTION_BUTTON_HEIGHT)
+                                   height=CORRECTION_BUTTON_HEIGHT, hover=False)
             button.grid(row=row, column=column, padx=15, pady=8)
             self._bind_correction(button, click_action, hold_action)
         self._add_close_button(content, row=3, width=CORRECTION_ROW_WIDTH,

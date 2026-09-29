@@ -1958,3 +1958,58 @@ class TestCorrectionsPower:
         built._settings_window()
         built._on_window_closed("settings")
         assert inverter.on is True
+
+
+class TestTouchFriendliness:
+    """The panel is operated with a finger: no hover states, no flicker."""
+
+    @staticmethod
+    def constructions():
+        import customtkinter
+
+        return (customtkinter.CTkButton.call_args_list
+                + customtkinter.CTkOptionMenu.call_args_list)
+
+    def test_no_widget_reacts_to_hovering(self, gui, controller):
+        """A touch screen sends no leave event, so a tapped button would keep its
+        hover colour until something else is touched."""
+        import customtkinter
+
+        customtkinter.CTkButton.reset_mock()
+        customtkinter.CTkOptionMenu.reset_mock()
+        controller.at_bottom = True
+        gui._settings_window()
+        gui._corrections_window()
+        gui._history_window()
+        gui._weather_icons_window()
+        assert self.constructions(), "nothing was built, the test proves nothing"
+        for call in self.constructions():
+            assert call.kwargs.get("hover") is False, call.kwargs.get("text")
+
+    def test_the_countdown_is_not_rewritten_on_every_tick(self, controller, weather, elapsed):
+        """Rewriting the same text four times a second makes the button blink."""
+        built = BedGui(controller, weather, inverter=FakeInverter())
+        built._start_move(MoveContext.UP, controller.move_up)
+        built.stop_button.configure.reset_mock()
+        for _ in range(4):
+            built._wait_before_move()  # same second, same text
+        assert not built.stop_button.configure.called
+
+    def test_a_changed_second_does_reach_the_button(self, controller, weather, elapsed):
+        built = BedGui(controller, weather, inverter=FakeInverter())
+        built._start_move(MoveContext.UP, controller.move_up)
+        built.stop_button.configure.reset_mock()
+        elapsed[0] += 2
+        built._wait_before_move()
+        assert built.stop_button.configure.called
+
+    def test_the_fonts_are_built_once(self, gui, controller, elapsed):
+        """A fresh CTkFont per tick is what made it flicker in the first place."""
+        import customtkinter
+
+        customtkinter.CTkFont.reset_mock()
+        gui._start_move(MoveContext.UP, controller.move_up)
+        for _ in range(4):
+            elapsed[0] += 1
+            gui._wait_before_move()
+        assert not customtkinter.CTkFont.called

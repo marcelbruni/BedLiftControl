@@ -281,6 +281,17 @@ The button is refused while the bed is moving, and only the two git steps are ru
 app is an editable install, so a pull is enough for code changes. A release that changes
 the dependencies still needs the terminal, see [DEPLOYMENT.md](DEPLOYMENT.md#update).
 
+## Touch panel
+
+Two things the 7" panel needs that a desktop does not:
+
+- **No hover.** A touch screen sends no leave event, so a tapped button keeps its hover
+  colour until something else is touched - it looks as if the wrong state were latched.
+  Every button and the dropdown are built with `hover=False`.
+- **No flicker.** The countdown ticks four times a second; the STOP button is only
+  reconfigured when its text actually changes, and both of its fonts are built once
+  instead of per tick.
+
 ## Kiosk mode
 
 ⚙ → "Kiosk-Modus einschalten" switches from the fixed window to fullscreen, which
