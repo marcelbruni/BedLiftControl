@@ -2013,3 +2013,52 @@ class TestTouchFriendliness:
             elapsed[0] += 1
             gui._wait_before_move()
         assert not customtkinter.CTkFont.called
+
+
+class TestBarLayout:
+    """One block of equal buttons, and a clock that fits between them and the edge."""
+
+    def test_the_bar_is_fifty_five_pixels(self):
+        assert gui_module.BAR_BUTTON_HEIGHT + 2 * gui_module.BAR_PAD_Y == 55
+
+    def test_every_button_has_the_same_size(self, controller, weather):
+        import customtkinter
+
+        customtkinter.CTkButton.reset_mock()
+        BedGui(controller, weather)
+        bar_buttons = [c.kwargs for c in customtkinter.CTkButton.call_args_list
+                       if c.kwargs.get("height") == gui_module.BAR_BUTTON_HEIGHT]
+        assert len(bar_buttons) == 4, "settings, corrections, 230V, update"
+        assert {kwargs["width"] for kwargs in bar_buttons} == {gui_module.BAR_BUTTON_WIDTH}
+
+    def test_the_widest_label_sets_that_width(self, controller, weather):
+        """Update is the longest word in the bar; nothing may be narrower than it."""
+        import customtkinter
+
+        customtkinter.CTkButton.reset_mock()
+        BedGui(controller, weather)
+        widths = {c.kwargs.get("text"): c.kwargs.get("width")
+                  for c in customtkinter.CTkButton.call_args_list}
+        assert widths["Update"] == gui_module.BAR_BUTTON_WIDTH
+
+    def test_the_clock_stays_inside_the_bar(self):
+        """The buttons size the bar; a taller clock would push it open."""
+        clock = gui_module.CLOCK_TIME_HEIGHT + gui_module.CLOCK_DATE_HEIGHT
+        assert clock <= gui_module.BAR_BUTTON_HEIGHT + 2 * gui_module.BAR_PAD_Y
+
+    def test_each_clock_line_has_room_for_its_font(self):
+        assert gui_module.CLOCK_TIME_HEIGHT > gui_module.CLOCK_TIME_SIZE
+        assert gui_module.CLOCK_DATE_HEIGHT > gui_module.CLOCK_DATE_SIZE
+
+    def test_the_time_is_the_bigger_line(self):
+        assert gui_module.CLOCK_TIME_SIZE > gui_module.CLOCK_DATE_SIZE
+
+    def test_both_clock_lines_are_right_aligned(self, controller, weather):
+        import customtkinter
+
+        customtkinter.CTkLabel.reset_mock()
+        BedGui(controller, weather)
+        anchors = [c.kwargs.get("anchor") for c in customtkinter.CTkLabel.call_args_list
+                   if c.kwargs.get("height") in (gui_module.CLOCK_TIME_HEIGHT,
+                                                 gui_module.CLOCK_DATE_HEIGHT)]
+        assert anchors == ["e", "e"]

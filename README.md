@@ -291,6 +291,10 @@ Two things the 7" panel needs that a desktop does not:
 - **No flicker.** The countdown ticks four times a second; the STOP button is only
   reconfigured when its text actually changes, and both of its fonts are built once
   instead of per tick.
+- **Finger sized targets.** The bottom bar is 55px tall and every button in it is the
+  same 90x45, taken from the widest label. The clock sits at the right in two lines,
+  time over date, sized to stay inside those 55px - anything taller pushes the bar open
+  and shifts the whole layout.
 
 ## Kiosk mode
 

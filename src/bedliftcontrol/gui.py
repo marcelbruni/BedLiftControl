@@ -52,8 +52,11 @@ CORRECTION_ROW_WIDTH = 2 * CORRECTION_BUTTON_WIDTH + 30
 # Held longer than this and the correction runs on until the button is let go;
 # released sooner and it is a plain click worth CORRECTION_STEPS.
 CORRECTION_HOLD_DELAY_MS = 400
-BAR_ICON_WIDTH = 50   # a single glyph
-BAR_BUTTON_WIDTH = 70  # a short word
+# One width for every button in the bar, taken from the widest label (Update), so
+# the row reads as one block. 45 + 2*5 is the 55px bar.
+BAR_BUTTON_WIDTH = 90
+BAR_BUTTON_HEIGHT = 45
+BAR_PAD_Y = 5
 LOCATION_MENU_WIDTH = 300
 KIOSK_BUTTON_WIDTH = 190   # the longest label of the three, side by side in one row
 SETTINGS_BUTTON_WIDTH = 120
@@ -69,13 +72,17 @@ COUNTDOWN_TICK_MS = 250
 COUNTDOWN_FONT_SIZE = 22  # the countdown is short lines, not one word
 POWER_ON_COLOR = "#c62828"  # red while mains is live: a warning, not a status
 POWER_OFF_COLOR = "#555555"
-UPDATE_BUTTON_WIDTH = 90
 UPDATE_BUTTON_COLOR = "#1f6aa5"  # blue: neither a warning nor a running motor
 
 POLL_INTERVAL_MS = 100
 UPDATE_POLL_MS = 5000  # the checker runs in a thread; the bar reads its result here
 WEATHER_UI_REFRESH_MS = 5000
 CLOCK_TICK_MS = 1000  # the display shows seconds, so it has to tick once a second
+# Two lines inside the 55px bar: 30 + 20 leaves a little air above and below.
+CLOCK_TIME_SIZE = 20
+CLOCK_TIME_HEIGHT = 30
+CLOCK_DATE_SIZE = 12
+CLOCK_DATE_HEIGHT = 20
 FORECAST_COL_WIDTH = 50
 # Emojis must be drawn with an emoji font, otherwise Tk measures them with the
 # default (Roboto) font and renders them wider, which shifts them off-center.
@@ -170,18 +177,21 @@ class BedGui:
         # bottom action bar
         bottom = ctk.CTkFrame(self.app, corner_radius=0)
         bottom.pack(side="bottom", fill="x")
-        ctk.CTkButton(bottom, text="⚙", width=BAR_ICON_WIDTH,
-                      command=self._settings_window, hover=False).pack(side="left", padx=4, pady=6)
-        self.corrections_button = ctk.CTkButton(bottom, text="↑↓", width=BAR_ICON_WIDTH,
-                                                command=self._corrections_window, hover=False)
-        self.corrections_button.pack(side="left", padx=4, pady=6)
-        self.power_button = ctk.CTkButton(bottom, text="230V", width=BAR_BUTTON_WIDTH,
-                                          command=self._toggle_inverter, hover=False)
-        self.power_button.pack(side="left", padx=4, pady=6)
+        ctk.CTkButton(bottom, text="⚙", width=BAR_BUTTON_WIDTH, height=BAR_BUTTON_HEIGHT,
+                      command=self._settings_window, hover=False).pack(
+            side="left", padx=4, pady=BAR_PAD_Y)
+        self.corrections_button = ctk.CTkButton(
+            bottom, text="↑↓", width=BAR_BUTTON_WIDTH, height=BAR_BUTTON_HEIGHT,
+            command=self._corrections_window, hover=False)
+        self.corrections_button.pack(side="left", padx=4, pady=BAR_PAD_Y)
+        self.power_button = ctk.CTkButton(
+            bottom, text="230V", width=BAR_BUTTON_WIDTH, height=BAR_BUTTON_HEIGHT,
+            command=self._toggle_inverter, hover=False)
+        self.power_button.pack(side="left", padx=4, pady=BAR_PAD_Y)
         # built here, shown only once an update is actually waiting
-        self.update_button = ctk.CTkButton(bottom, text="Update", width=UPDATE_BUTTON_WIDTH,
-                                           fg_color=UPDATE_BUTTON_COLOR,
-                                           command=self._on_update, hover=False)
+        self.update_button = ctk.CTkButton(
+            bottom, text="Update", width=BAR_BUTTON_WIDTH, height=BAR_BUTTON_HEIGHT,
+            fg_color=UPDATE_BUTTON_COLOR, command=self._on_update, hover=False)
         self._build_clock_panel(bottom)
 
         # left vertical bar: empty when the bed is up, fills from the top down as the
@@ -392,7 +402,7 @@ class BedGui:
     def _refresh_update_button(self) -> None:
         """The button only exists while there is something to install."""
         if self.updater.update_available and not self._updating:
-            self.update_button.pack(side="left", padx=4, pady=6)
+            self.update_button.pack(side="left", padx=4, pady=BAR_PAD_Y)
         elif not self._updating:
             self.update_button.pack_forget()
         self.app.after(UPDATE_POLL_MS, self._refresh_update_button)
@@ -872,10 +882,18 @@ class BedGui:
     # which is exactly when the clock still has to tick.
 
     def _build_clock_panel(self, parent) -> None:
-        self.clock_time = ctk.CTkLabel(parent, text="", font=ctk.CTkFont(size=20, weight="bold"))
-        self.clock_time.pack(side="right", padx=(6, 12))
-        self.clock_date = ctk.CTkLabel(parent, text="", font=ctk.CTkFont(size=13), text_color="#888888")
-        self.clock_date.pack(side="right")
+        """Time over date, both flush right. Sized to stay inside the bar: the buttons
+        set its height, and a taller clock would push the whole bar open."""
+        column = ctk.CTkFrame(parent, fg_color="transparent")
+        column.pack(side="right", padx=(6, 12))
+        self.clock_time = ctk.CTkLabel(column, text="", anchor="e",
+                                       height=CLOCK_TIME_HEIGHT,
+                                       font=ctk.CTkFont(size=CLOCK_TIME_SIZE, weight="bold"))
+        self.clock_time.pack(anchor="e")
+        self.clock_date = ctk.CTkLabel(column, text="", anchor="e", text_color="#888888",
+                                       height=CLOCK_DATE_HEIGHT,
+                                       font=ctk.CTkFont(size=CLOCK_DATE_SIZE))
+        self.clock_date.pack(anchor="e")
 
     def _update_clock(self) -> None:
         moment = self.timesync.now()
