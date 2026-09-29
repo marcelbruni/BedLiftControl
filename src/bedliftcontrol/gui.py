@@ -34,10 +34,19 @@ WINDOW_GEOMETRY = "800x420"  # the Pi 7" display is 800x480, kiosk mode takes al
 APPEARANCE_MODE = "dark"
 COLOR_THEME = "green"
 PROGRESS_COLOR = "#43a047"
-MIN_BAR_FRACTION = 0.12  # a stub of the bar stays visible even when the bed is up
-STUB_TRIM_PX = 10  # shortens that stub; converted to a fraction of the track at runtime
+# A stub of the bar stays visible when the bed is up, with the bed icon riding on it.
+# Counted in pixels, not as a fraction of the track: as a fraction it grew with the
+# window and left green showing above the icon on the taller kiosk screen.
 ICON_HEIGHT = 21  # matches the emoji glyph height; trimmed off the label's empty top so
                   # the square label stays inside the bar's rounded top cap
+BED_ICON_MARGIN = 4      # keeps the icon clear of the rounded bottom cap
+BAR_CORNER_RADIUS = 10   # the fill's rounding, and what the stub needs above the icon
+# Less green above the icon and the rounding shows as two corners beside it instead of
+# as a cap; much more and the stub turns into a green block. Measured: 24 and 26 show
+# the corners, 37 is a block, the old fraction-based stub sat at 28 (window) and 35
+# (kiosk) for weeks without complaint.
+STUB_HEIGHT = ICON_HEIGHT + BED_ICON_MARGIN + BAR_CORNER_RADIUS - 2
+MIN_BAR_FRACTION = 0.12  # fallback for the moment before the track has a size
 ARROW_FONT_SIZE = 96
 # "STOP" is four glyphs wide, not one arrow: at the arrow size it measures 348px in
 # a 180px button and gets clipped on both sides. 40 measures 143px.
@@ -212,7 +221,7 @@ class BedGui:
         # on the bottom edge, so the trim comes off the empty top - otherwise the label's
         # square green box would overdraw the rounded top cap of the bar.
         self.bed_icon = ctk.CTkLabel(self.progress_fill, text="🛏", font=ctk.CTkFont(family=_EMOJI_FONT, size=16), fg_color="transparent", height=ICON_HEIGHT, anchor="s")
-        self.bed_icon.place(relx=0.5, rely=1.0, y=-4, anchor="s")
+        self.bed_icon.place(relx=0.5, rely=1.0, y=-BED_ICON_MARGIN, anchor="s")
         self.progress_label = ctk.CTkLabel(left, text="", width=48)
         self.progress_label.pack(side="bottom", pady=4)
 
@@ -259,24 +268,26 @@ class BedGui:
             fg_color=BUTTON_COLOR if enabled else BUTTON_DISABLED_COLOR,
         )
 
-    def _stub_trim(self) -> float:
-        """STUB_TRIM_PX as a fraction of the track, 0.0 while the track has no size yet."""
+    def _minimum_fill(self) -> float:
+        """The stub left when the bed is up, as a fraction of the track.
+
+        STUB_HEIGHT pixels at any window height, so the window and the kiosk screen
+        look the same - as a fraction of the track the stub grew with the window.
+        """
         height = self.progress_track.winfo_height()
-        if height <= 1:
-            return 0.0
-        return STUB_TRIM_PX / height
+        if height <= 1:  # not laid out yet
+            return MIN_BAR_FRACTION
+        return STUB_HEIGHT / height
 
     def _set_bar(self, fill_level: float) -> None:
         # inverted + top-anchored: a stub stays visible when the bed is up, fills from
         # the top down as the bed is lowered
         self._bar_fill_level = fill_level
         fraction = 1.0 - max(0.0, min(1.0, fill_level))
-        # map [0,1] onto [MIN_BAR_FRACTION,1.0] so the fill keeps moving over the whole
-        # travel instead of freezing on the stub for the last few percent
-        relheight = MIN_BAR_FRACTION + fraction * (1.0 - MIN_BAR_FRACTION)
-        # trim the stub only: full weight when the bed is up, gone when it is fully down,
-        # so the bar still reaches the bottom of the track
-        relheight -= self._stub_trim() * (1.0 - fraction)
+        # map [0,1] onto [stub,1.0] so the fill keeps moving over the whole travel
+        # instead of freezing on the stub for the last few percent
+        minimum = self._minimum_fill()
+        relheight = minimum + fraction * (1.0 - minimum)
         self.progress_fill.place(relx=0, rely=0, relwidth=1.0, relheight=relheight, anchor="nw")
 
     @staticmethod

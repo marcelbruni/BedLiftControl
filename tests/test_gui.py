@@ -9,7 +9,15 @@ from unittest.mock import MagicMock
 import pytest
 
 from bedliftcontrol import gui as gui_module
-from bedliftcontrol.gui import MIN_BAR_FRACTION, STUB_TRIM_PX, BedGui, MoveContext
+from bedliftcontrol.gui import (
+    BAR_CORNER_RADIUS,
+    BED_ICON_MARGIN,
+    ICON_HEIGHT,
+    STUB_HEIGHT,
+    MIN_BAR_FRACTION,
+    BedGui,
+    MoveContext,
+)
 
 WIDGETS = [
     "CTk",
@@ -206,28 +214,43 @@ class TestPollMovement:
 
 
 class TestProgressBar:
-    def test_bar_keeps_a_stub_when_up(self, gui):
-        gui._set_bar(1.0)  # 1.0 == bed up
-        gui.progress_fill.place.assert_called_with(relx=0, rely=0, relwidth=1.0, relheight=MIN_BAR_FRACTION, anchor="nw")
+    """The stub left when the bed is up is counted in pixels, so the window and the
+    kiosk screen look the same - as a fraction it grew with the window."""
 
-    def test_stub_is_trimmed_by_ten_pixels_when_up(self, gui):
+    STUB_PIXELS = STUB_HEIGHT
+
+    def test_the_stub_is_sized_to_the_icon(self, gui):
         gui.progress_track.winfo_height.return_value = 200
         gui._set_bar(1.0)  # 1.0 == bed up
-        expected = MIN_BAR_FRACTION - STUB_TRIM_PX / 200
-        gui.progress_fill.place.assert_called_with(relx=0, rely=0, relwidth=1.0, relheight=expected, anchor="nw")
+        gui.progress_fill.place.assert_called_with(
+            relx=0, rely=0, relwidth=1.0, relheight=self.STUB_PIXELS / 200, anchor="nw")
+
+    def test_the_same_pixels_on_a_taller_screen(self, gui):
+        """The kiosk track is 60px taller than the window's; the stub must not follow."""
+        gui.progress_track.winfo_height.return_value = 400
+        gui._set_bar(1.0)
+        gui.progress_fill.place.assert_called_with(
+            relx=0, rely=0, relwidth=1.0, relheight=self.STUB_PIXELS / 400, anchor="nw")
+
+    def test_the_rounding_has_room_above_the_icon(self):
+        """With less than its radius above the icon, the cap shows as two corners."""
+        above_the_icon = STUB_HEIGHT - ICON_HEIGHT - BED_ICON_MARGIN
+        assert above_the_icon >= BAR_CORNER_RADIUS - 2
+
+    def test_before_the_layout_it_falls_back(self, gui):
+        gui._set_bar(1.0)  # the mock track reports height 0
+        gui.progress_fill.place.assert_called_with(
+            relx=0, rely=0, relwidth=1.0, relheight=MIN_BAR_FRACTION, anchor="nw")
 
     def test_bar_still_fills_the_track_when_down(self, gui):
         gui.progress_track.winfo_height.return_value = 200
-        gui._set_bar(0.0)  # 0.0 == bed down, trim must not apply here
-        gui.progress_fill.place.assert_called_with(relx=0, rely=0, relwidth=1.0, relheight=1.0, anchor="nw")
-
-    def test_bar_full_when_down(self, gui):
         gui._set_bar(0.0)  # 0.0 == bed down
         gui.progress_fill.place.assert_called_with(relx=0, rely=0, relwidth=1.0, relheight=1.0, anchor="nw")
 
     def test_clamps_out_of_range(self, gui):
         gui._set_bar(2.0)  # clamps to bed up -> stub
-        gui.progress_fill.place.assert_called_with(relx=0, rely=0, relwidth=1.0, relheight=MIN_BAR_FRACTION, anchor="nw")
+        gui.progress_fill.place.assert_called_with(
+            relx=0, rely=0, relwidth=1.0, relheight=MIN_BAR_FRACTION, anchor="nw")
 
 
 class TestCorrect:
