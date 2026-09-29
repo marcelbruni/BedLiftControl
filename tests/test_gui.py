@@ -2041,6 +2041,32 @@ class TestBarLayout:
                   for c in customtkinter.CTkButton.call_args_list}
         assert widths["Update"] == gui_module.BAR_BUTTON_WIDTH
 
+    def test_the_labels_use_the_bigger_bar_font(self, controller, weather):
+        import customtkinter
+
+        customtkinter.CTkFont.reset_mock()
+        customtkinter.CTkButton.reset_mock()
+        BedGui(controller, weather)
+        sizes = [c.kwargs.get("size") for c in customtkinter.CTkFont.call_args_list]
+        assert gui_module.BAR_FONT_SIZE in sizes
+        fonts = [c.kwargs.get("font") for c in customtkinter.CTkButton.call_args_list
+                 if c.kwargs.get("height") == gui_module.BAR_BUTTON_HEIGHT]
+        assert len(fonts) == 4 and all(font is not None for font in fonts)
+
+    def test_one_font_serves_the_whole_bar(self, controller, weather):
+        """Four identical CTkFonts would be four objects doing the same job."""
+        import customtkinter
+
+        customtkinter.CTkButton.reset_mock()
+        BedGui(controller, weather)
+        fonts = {id(c.kwargs.get("font")) for c in customtkinter.CTkButton.call_args_list
+                 if c.kwargs.get("height") == gui_module.BAR_BUTTON_HEIGHT}
+        assert len(fonts) == 1
+
+    def test_the_longest_label_still_fits(self):
+        """Measured at size 18: Update renders 58px into a 90px button."""
+        assert gui_module.BAR_FONT_SIZE <= 20
+
     def test_the_clock_stays_inside_the_bar(self):
         """The buttons size the bar; a taller clock would push it open."""
         clock = gui_module.CLOCK_TIME_HEIGHT + gui_module.CLOCK_DATE_HEIGHT

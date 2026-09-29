@@ -57,6 +57,7 @@ CORRECTION_HOLD_DELAY_MS = 400
 BAR_BUTTON_WIDTH = 90
 BAR_BUTTON_HEIGHT = 45
 BAR_PAD_Y = 5
+BAR_FONT_SIZE = 18  # the glyphs and labels are read from arm's length
 LOCATION_MENU_WIDTH = 300
 KIOSK_BUTTON_WIDTH = 190   # the longest label of the three, side by side in one row
 SETTINGS_BUTTON_WIDTH = 120
@@ -177,21 +178,23 @@ class BedGui:
         # bottom action bar
         bottom = ctk.CTkFrame(self.app, corner_radius=0)
         bottom.pack(side="bottom", fill="x")
+        bar_font = ctk.CTkFont(size=BAR_FONT_SIZE)
         ctk.CTkButton(bottom, text="⚙", width=BAR_BUTTON_WIDTH, height=BAR_BUTTON_HEIGHT,
-                      command=self._settings_window, hover=False).pack(
+                      font=bar_font, command=self._settings_window, hover=False).pack(
             side="left", padx=4, pady=BAR_PAD_Y)
         self.corrections_button = ctk.CTkButton(
             bottom, text="↑↓", width=BAR_BUTTON_WIDTH, height=BAR_BUTTON_HEIGHT,
-            command=self._corrections_window, hover=False)
+            font=bar_font, command=self._corrections_window, hover=False)
         self.corrections_button.pack(side="left", padx=4, pady=BAR_PAD_Y)
         self.power_button = ctk.CTkButton(
             bottom, text="230V", width=BAR_BUTTON_WIDTH, height=BAR_BUTTON_HEIGHT,
-            command=self._toggle_inverter, hover=False)
+            font=bar_font, command=self._toggle_inverter, hover=False)
         self.power_button.pack(side="left", padx=4, pady=BAR_PAD_Y)
         # built here, shown only once an update is actually waiting
         self.update_button = ctk.CTkButton(
             bottom, text="Update", width=BAR_BUTTON_WIDTH, height=BAR_BUTTON_HEIGHT,
-            fg_color=UPDATE_BUTTON_COLOR, command=self._on_update, hover=False)
+            font=bar_font, fg_color=UPDATE_BUTTON_COLOR, command=self._on_update,
+            hover=False)
         self._build_clock_panel(bottom)
 
         # left vertical bar: empty when the bed is up, fills from the top down as the
