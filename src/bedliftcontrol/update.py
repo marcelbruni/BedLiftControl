@@ -1,9 +1,11 @@
-"""Looks on GitHub for a newer version and installs it with git.
+"""Installs a newer version from GitHub, on request.
 
-The Pi has no keyboard, so the update procedure from DEPLOYMENT.md is wrapped here and
-offered as a button. Only the two git steps are run: the app is an editable install, so
-a pull is enough for code changes. If a release ever changes the dependencies, that one
-still needs the terminal.
+The Pi has no keyboard, so the git steps from DEPLOYMENT.md are wrapped here and offered
+as a button in the settings. Looking and installing are one action: nothing runs in the
+background, nothing is polled - the check happens when the button is pressed.
+
+Only code changes are covered: the app is an editable install, so a pull is enough. If a
+release ever changes the dependencies, that one still needs the terminal.
 
 `data/config.json` is checked in and the running app keeps writing to it, so a pull would
 be refused. The file is therefore discarded before pulling - the caller writes the live
@@ -13,18 +15,21 @@ values back afterwards, which is what keeps the bed position across an update.
 import logging
 import os
 import subprocess
-import threading
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 REPO_DIR = str(Path(__file__).resolve().parents[2])
-CHECK_INTERVAL_SECONDS = 1800
-# short, so the button turns up soon after the phone hotspot comes back
-RETRY_INTERVAL_SECONDS = 300
 FETCH_TIMEOUT = 30
 PULL_TIMEOUT = 120
 CONFIG_PATH = "data/config.json"
+UNKNOWN_VERSION = "unbekannt"
+VERSION_FORMAT = "%h · %ad"
+VERSION_DATE_FORMAT = "format:%d.%m.%Y %H:%M"
+
+UPDATED = "updated"
+UP_TO_DATE = "up_to_date"
+FAILED = "failed"
 
 
 def _git(*args, timeout: int = FETCH_TIMEOUT) -> subprocess.CompletedProcess:
@@ -33,79 +38,68 @@ def _git(*args, timeout: int = FETCH_TIMEOUT) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", "-C", REPO_DIR, *args],
         capture_output=True, text=True, timeout=timeout, env=env, check=False,
+        # git speaks UTF-8; without this the locale codepage mangles anything non-ASCII
+        encoding="utf-8", errors="replace",
     )
 
 
-class UpdateChecker:
-    """Counts the commits the checkout is behind its remote branch."""
+class Updater:
+    """Looks for a newer version on GitHub and installs it in the same go."""
 
-    def __init__(self, interval: int = CHECK_INTERVAL_SECONDS,
-                 retry_interval: int = RETRY_INTERVAL_SECONDS):
-        self.interval = interval
-        self.retry_interval = retry_interval
-        self.pending = 0
-        self._lock = threading.Lock()
-        self._stop = threading.Event()
-        self._thread = None
+    def install(self) -> str:
+        """One of UPDATED, UP_TO_DATE or FAILED."""
+        pending = self._pending()
+        if pending is None:
+            return FAILED
+        if not pending:
+            logger.info("Already on the latest version")
+            return UP_TO_DATE
+        logger.info("Installing %s new commit(s)", pending)
+        return UPDATED if self._pull() else FAILED
 
-    @property
-    def update_available(self) -> bool:
-        return self.pending > 0
+    def version(self) -> str:
+        """The checked-out commit and its date - enough to tell two states apart."""
+        result = self._run(("log", "-1", f"--format={VERSION_FORMAT}",
+                            f"--date={VERSION_DATE_FORMAT}"))
+        if result is None or result.returncode != 0:
+            return UNKNOWN_VERSION
+        return result.stdout.strip() or UNKNOWN_VERSION
 
-    def check_once(self) -> bool:
-        """True when the remote could be reached, whatever it answered."""
-        try:
-            fetched = _git("fetch", "--quiet")
-            if fetched.returncode != 0:
+    def _pending(self):
+        """Commits the checkout is behind its remote branch, or None when git failed."""
+        fetched = self._run(("fetch", "--quiet"))
+        if fetched is None or fetched.returncode != 0:
+            if fetched is not None:
                 logger.info("Update check failed: %s", fetched.stderr.strip())
-                return False
-            counted = _git("rev-list", "--count", "HEAD..@{u}")
-            if counted.returncode != 0:
+            return None
+        counted = self._run(("rev-list", "--count", "HEAD..@{u}"))
+        if counted is None or counted.returncode != 0:
+            if counted is not None:
                 logger.warning("Cannot compare with the remote branch: %s",
                                counted.stderr.strip())
-                return False
-        except (OSError, subprocess.SubprocessError) as error:
-            logger.info("Update check failed (%s)", error)
-            return False
-        with self._lock:
-            self.pending = int(counted.stdout.strip() or 0)
-        if self.pending:
-            logger.info("Update available: %s commits behind", self.pending)
-        return True
+            return None
+        return int(counted.stdout.strip() or 0)
 
-    def apply(self) -> bool:
-        """Discard the local config, fast-forward. True when the checkout moved."""
+    def _pull(self) -> bool:
         steps = (
             (("checkout", "--", CONFIG_PATH), FETCH_TIMEOUT),
             (("pull", "--ff-only"), PULL_TIMEOUT),
         )
         for args, timeout in steps:
-            try:
-                result = _git(*args, timeout=timeout)
-            except (OSError, subprocess.SubprocessError) as error:
-                logger.error("Update step %s failed (%s)", args[0], error)
+            result = self._run(args, timeout=timeout)
+            if result is None:
                 return False
             if result.returncode != 0:
                 logger.error("Update step %s failed: %s", args[0], result.stderr.strip())
                 return False
-        with self._lock:
-            self.pending = 0
         logger.info("Updated to the latest version")
         return True
 
-    def start(self) -> None:
-        if self._thread is not None:
-            return
-        self._thread = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=2)
-            self._thread = None
-
-    def _loop(self) -> None:
-        while not self._stop.is_set():
-            reached = self.check_once()
-            self._stop.wait(self.interval if reached else self.retry_interval)
+    @staticmethod
+    def _run(args, timeout: int = FETCH_TIMEOUT):
+        """None when git itself could not be run - no network, no git, no patience."""
+        try:
+            return _git(*args, timeout=timeout)
+        except (OSError, subprocess.SubprocessError) as error:
+            logger.info("git %s failed (%s)", args[0], error)
+            return None

@@ -1,4 +1,4 @@
-"""Tests for the update check.
+"""Tests for the update button.
 
 git is replaced by a stub that records the calls, so nothing touches the network or
 the working tree.
@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from bedliftcontrol import update as update_module
-from bedliftcontrol.update import REPO_DIR, UpdateChecker
+from bedliftcontrol.update import FAILED, REPO_DIR, UPDATED, UP_TO_DATE, Updater
 
 
 class GitStub:
@@ -18,15 +18,21 @@ class GitStub:
     def __init__(self, *results):
         self.results = list(results)
         self.calls = []
+        self.kwargs = {}
         self.env = None
 
     def __call__(self, args, **kwargs):
         self.calls.append(list(args))
+        self.kwargs = kwargs
         self.env = kwargs.get("env")
         result = self.results.pop(0) if self.results else ok()
         if isinstance(result, Exception):
             raise result
         return result
+
+    @property
+    def commands(self):
+        return [call[3] for call in self.calls]
 
 
 def ok(stdout=""):
@@ -45,141 +51,112 @@ def git(monkeypatch):
 
 
 @pytest.fixture
-def checker():
-    return UpdateChecker()
+def updater():
+    return Updater()
 
 
-class TestCheck:
-    def test_it_fetches_before_comparing(self, checker, git):
+class TestInstall:
+    def test_it_looks_before_it_pulls(self, updater, git):
+        git.results = [ok(), ok("2")]
+        updater.install()
+        assert git.commands == ["fetch", "rev-list", "checkout", "pull"]
+
+    def test_it_reports_the_installation(self, updater, git):
+        git.results = [ok(), ok("2")]
+        assert updater.install() == UPDATED
+
+    def test_nothing_new_means_nothing_is_pulled(self, updater, git):
+        git.results = [ok(), ok("0\n")]
+        assert updater.install() == UP_TO_DATE
+        assert git.commands == ["fetch", "rev-list"]
+
+    def test_an_empty_answer_counts_as_nothing_new(self, updater, git):
+        git.results = [ok(), ok("")]
+        assert updater.install() == UP_TO_DATE
+
+    def test_it_works_in_the_project_directory(self, updater, git):
         git.results = [ok(), ok("0")]
-        checker.check_once()
-        assert git.calls[0][3] == "fetch"
-        assert git.calls[1][3] == "rev-list"
-
-    def test_it_works_in_the_project_directory(self, checker, git):
-        git.results = [ok(), ok("0")]
-        checker.check_once()
+        updater.install()
         assert git.calls[0][:3] == ["git", "-C", REPO_DIR]
 
-    def test_it_never_asks_for_credentials(self, checker, git):
+    def test_it_never_asks_for_credentials(self, updater, git):
         """There is no keyboard: a prompting git would hang the thread forever."""
         git.results = [ok(), ok("0")]
-        checker.check_once()
+        updater.install()
         assert git.env["GIT_TERMINAL_PROMPT"] == "0"
 
-    def test_it_counts_the_commits_behind(self, checker, git):
-        git.results = [ok(), ok("3\n")]
-        assert checker.check_once() is True
-        assert checker.pending == 3
-        assert checker.update_available is True
+    def test_it_clears_the_config_before_pulling(self, updater, git):
+        """The running app keeps writing the checked-in config, so a pull is refused
+        until that copy is out of the way."""
+        git.results = [ok(), ok("1")]
+        updater.install()
+        assert git.calls[2][3:] == ["checkout", "--", "data/config.json"]
+        assert git.calls[3][3:] == ["pull", "--ff-only"]
 
-    def test_being_up_to_date_is_not_an_update(self, checker, git):
-        git.results = [ok(), ok("0\n")]
-        checker.check_once()
-        assert checker.update_available is False
 
-    def test_an_empty_answer_counts_as_none(self, checker, git):
-        git.results = [ok(), ok("")]
-        checker.check_once()
-        assert checker.pending == 0
-
-    def test_a_failed_fetch_reports_offline(self, checker, git):
+class TestWhenItCannotBeDone:
+    def test_being_offline_is_not_being_up_to_date(self, updater, git):
         git.results = [failed("could not resolve host")]
-        assert checker.check_once() is False
+        assert updater.install() == FAILED
 
-    def test_a_failed_fetch_leaves_the_last_answer_alone(self, checker, git):
-        git.results = [ok(), ok("2")]
-        checker.check_once()
-        git.results = [failed()]
-        checker.check_once()
-        assert checker.pending == 2, "offline is not the same as up to date"
+    def test_a_missing_upstream_fails(self, updater, git):
+        git.results = [ok(), failed("no upstream configured")]
+        assert updater.install() == FAILED
 
-    def test_a_failed_comparison_reports_offline(self, checker, git):
-        git.results = [ok(), failed("no upstream")]
-        assert checker.check_once() is False
+    def test_a_failed_checkout_stops_before_pulling(self, updater, git):
+        git.results = [ok(), ok("1"), failed()]
+        assert updater.install() == FAILED
+        assert "pull" not in git.commands
 
-    def test_a_timeout_is_not_an_error(self, checker, git, monkeypatch):
+    def test_a_failed_pull_is_reported(self, updater, git):
+        git.results = [ok(), ok("1"), ok(), failed("would be overwritten")]
+        assert updater.install() == FAILED
+
+    def test_a_timeout_is_caught(self, updater, git):
         import subprocess
 
         git.results = [subprocess.TimeoutExpired("git", 30)]
-        assert checker.check_once() is False
+        assert updater.install() == FAILED
 
-    def test_a_missing_git_is_not_an_error(self, checker, git):
+    def test_a_missing_git_is_caught(self, updater, git):
         git.results = [FileNotFoundError("git")]
-        assert checker.check_once() is False
+        assert updater.install() == FAILED
+
+    def test_a_crash_while_pulling_is_caught(self, updater, git):
+        git.results = [ok(), ok("1"), OSError("no such file")]
+        assert updater.install() == FAILED
 
 
-class TestApply:
-    def test_it_clears_the_config_then_pulls(self, checker, git):
-        """The running app keeps writing the checked-in config, so a pull is refused
-        until that copy is out of the way."""
-        checker.apply()
-        assert git.calls[0][3:] == ["checkout", "--", "data/config.json"]
-        assert git.calls[1][3:] == ["pull", "--ff-only"]
+class TestVersion:
+    def test_it_reports_the_checked_out_commit(self, updater, git):
+        git.results = [ok("e28a2d1 · 29.09.2026 21:52\n")]
+        assert updater.version() == "e28a2d1 · 29.09.2026 21:52"
 
-    def test_it_reports_success(self, checker, git):
-        assert checker.apply() is True
+    def test_it_reads_only_the_last_commit(self, updater, git):
+        git.results = [ok("x")]
+        updater.version()
+        assert git.calls[0][3:5] == ["log", "-1"]
 
-    def test_the_button_goes_away_afterwards(self, checker, git):
-        git.results = [ok(), ok("2")]
-        checker.check_once()
-        git.results = []
-        checker.apply()
-        assert checker.update_available is False
+    def test_it_asks_nothing_of_the_network(self, updater, git):
+        """Opening the settings must not wait for GitHub."""
+        git.results = [ok("x")]
+        updater.version()
+        assert git.commands == ["log"]
 
-    def test_a_failed_checkout_stops_before_pulling(self, checker, git):
-        git.results = [failed()]
-        assert checker.apply() is False
-        assert len(git.calls) == 1
+    def test_a_checkout_without_git_says_so(self, updater, git):
+        git.results = [failed("not a git repository")]
+        assert updater.version() == update_module.UNKNOWN_VERSION
 
-    def test_a_failed_pull_reports_failure(self, checker, git):
-        git.results = [ok(), failed("would be overwritten")]
-        assert checker.apply() is False
+    def test_a_missing_git_says_so(self, updater, git):
+        git.results = [FileNotFoundError("git")]
+        assert updater.version() == update_module.UNKNOWN_VERSION
 
-    def test_a_failed_update_keeps_the_button(self, checker, git):
-        git.results = [ok(), ok("2")]
-        checker.check_once()
-        git.results = [ok(), failed()]
-        checker.apply()
-        assert checker.update_available is True
+    def test_an_empty_answer_says_so(self, updater, git):
+        git.results = [ok("  \n")]
+        assert updater.version() == update_module.UNKNOWN_VERSION
 
-    def test_a_crashing_git_is_caught(self, checker, git):
-        git.results = [OSError("no such file")]
-        assert checker.apply() is False
-
-
-class TestLoop:
-    @staticmethod
-    def one_round(checker, monkeypatch, reached):
-        """Record the wait of a single round, then let the loop end."""
-        waits = []
-
-        def wait(seconds):
-            waits.append(seconds)
-            checker._stop.set()
-            return True
-
-        monkeypatch.setattr(checker, "check_once", lambda: reached)
-        monkeypatch.setattr(checker._stop, "wait", wait)
-        checker._loop()
-        return waits
-
-    def test_it_waits_the_full_interval_when_it_reached_the_remote(self, checker, monkeypatch):
-        assert self.one_round(checker, monkeypatch, reached=True) == [checker.interval]
-
-    def test_it_retries_sooner_while_offline(self, checker, monkeypatch):
-        """So the button turns up shortly after the hotspot comes back."""
-        assert self.one_round(checker, monkeypatch, reached=False) == [checker.retry_interval]
-
-    def test_stopping_ends_the_loop(self, checker, monkeypatch):
-        monkeypatch.setattr(checker, "check_once", lambda: True)
-        checker._stop.set()
-        checker._loop()  # must return at once
-
-    def test_start_is_idempotent(self, checker, monkeypatch):
-        monkeypatch.setattr(checker, "check_once", lambda: True)
-        checker.start()
-        first = checker._thread
-        checker.start()
-        assert checker._thread is first
-        checker.stop()
+    def test_git_is_read_as_utf_8(self, updater, git):
+        """The Windows locale codepage turns the separator into two characters."""
+        git.results = [ok("x")]
+        updater.version()
+        assert git.kwargs["encoding"] == "utf-8"

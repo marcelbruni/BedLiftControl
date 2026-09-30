@@ -16,13 +16,10 @@ logger = logging.getLogger(__name__)
 CONFIG_FILE = str(Path(__file__).resolve().parents[2] / "data" / "config.json")
 
 DEFAULT_TOTAL_STEPS = 28000
-DEFAULT_SPEED_PPS = 800.0
+DEFAULT_SPEED_PPS = 700.0
 DEFAULT_BED_UP = True
 DEFAULT_KIOSK = False
 DEFAULT_WEATHER_LOCATION = "phone"
-DEFAULT_INVERTER_STARTUP_SECONDS = 10.0
-INVERTER_STARTUP_MIN = 0.0
-INVERTER_STARTUP_MAX = 15.0
 DEFAULT_ROPE_DELAY_SECONDS = 10.0
 ROPE_DELAY_MIN = 0.0
 ROPE_DELAY_MAX = 20.0
@@ -35,7 +32,6 @@ class Config:
     bed_up: bool = DEFAULT_BED_UP
     kiosk: bool = DEFAULT_KIOSK
     weather_location: str = DEFAULT_WEATHER_LOCATION
-    inverter_startup_seconds: float = DEFAULT_INVERTER_STARTUP_SECONDS
     rope_delay_seconds: float = DEFAULT_ROPE_DELAY_SECONDS
     # 0 = bed fully down, total_steps = fully up. Anything in between is a position
     # the user stopped at, from which the next move continues or reverses.
@@ -65,8 +61,6 @@ class Config:
                 kiosk=bool(data.get("kiosk", DEFAULT_KIOSK)),
                 position_steps=int(data.get("position_steps", -1)),
                 weather_location=str(data.get("weather_location", DEFAULT_WEATHER_LOCATION)),
-                inverter_startup_seconds=float(
-                    data.get("inverter_startup_seconds", DEFAULT_INVERTER_STARTUP_SECONDS)),
                 rope_delay_seconds=float(
                     data.get("rope_delay_seconds", DEFAULT_ROPE_DELAY_SECONDS)),
                 path=str(path),
@@ -94,7 +88,6 @@ class Config:
         if self.speed_pps <= 0:
             logger.warning("speed_pps %s invalid, resetting to %s", self.speed_pps, DEFAULT_SPEED_PPS)
             self.speed_pps = DEFAULT_SPEED_PPS
-        self._clamp("inverter_startup_seconds", INVERTER_STARTUP_MIN, INVERTER_STARTUP_MAX)
         self._clamp("rope_delay_seconds", ROPE_DELAY_MIN, ROPE_DELAY_MAX)
 
     def _clamp(self, name: str, low: float, high: float) -> None:
@@ -113,7 +106,6 @@ class Config:
                 "kiosk": self.kiosk,
                 "position_steps": self.position_steps,
                 "weather_location": self.weather_location,
-                "inverter_startup_seconds": self.inverter_startup_seconds,
                 "rope_delay_seconds": self.rope_delay_seconds,
             },
             indent=2,

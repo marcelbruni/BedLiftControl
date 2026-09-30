@@ -11,6 +11,8 @@ square and scaled to the requested pixel size, which lets one definition serve t
 panel icon, the 34px forecast icon and the 26px reference table alike.
 """
 
+from __future__ import annotations
+
 import math
 import tkinter
 from dataclasses import dataclass
@@ -249,9 +251,40 @@ class IconCanvas(tkinter.Canvas):
                          highlightthickness=0, borderwidth=0)
         self._size = size
         self._key = None
+        self._warning_color = None
 
-    def show(self, key: str) -> None:
-        if key == self._key:
+    def show(self, key: str, warning_color: str | None = None) -> None:
+        """The warning colour is part of the state: a warning that appears or clears
+        has to redraw the icon even when the weather itself has not changed."""
+        if key == self._key and warning_color == self._warning_color:
             return
-        self._key = key
+        self._key, self._warning_color = key, warning_color
         draw_icon(self, key, self._size)
+        if warning_color:
+            draw_warning(self, self._size, warning_color)
+
+
+WARNING_MARK_COLOR = "#1b1b1b"
+_WARNING_BOX = (0.50, 0.0, 1.0, 0.50)  # top right corner of the icon
+
+
+def draw_warning(canvas, size, color) -> None:
+    """A warning triangle in the corner of a weather icon.
+
+    Drawn onto the icon rather than placed next to it: the panel is tuned to the pixel
+    and a marker of its own would shift the row it sits in.
+    """
+    left, top, right, bottom = _WARNING_BOX
+    canvas.create_polygon(
+        (left + right) / 2 * size, top * size,
+        right * size, bottom * size,
+        left * size, bottom * size,
+        fill=color, outline="",
+    )
+    middle = (left + right) / 2 * size
+    canvas.create_line(middle, (top + 0.16) * size, middle, (bottom - 0.14) * size,
+                       fill=WARNING_MARK_COLOR, width=max(1, round(0.045 * size)),
+                       capstyle="round")
+    canvas.create_oval(middle - 0.022 * size, (bottom - 0.10) * size,
+                       middle + 0.022 * size, (bottom - 0.056) * size,
+                       fill=WARNING_MARK_COLOR, outline="")

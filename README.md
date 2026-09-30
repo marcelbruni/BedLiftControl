@@ -30,6 +30,7 @@ BedLiftControl/
 ├── src/
 │   └── bedliftcontrol/
 │       ├── __init__.py
+│       ├── alerts.py        # Official weather warnings from the MeteoAlarm feeds
 │       ├── autostart.py     # Installs/removes the desktop autostart entry
 │       ├── clock.py         # Date and time formatting (German, locale independent)
 │       ├── config.py        # Config dataclass, load/save JSON
@@ -40,7 +41,7 @@ BedLiftControl/
 │       ├── inverter.py      # 230V inverter, switched over its remote contact
 │       ├── main.py          # Entry point
 │       ├── timesync.py      # Keeps the shown clock right when the Pi's is not
-│       ├── update.py        # Checks GitHub and installs with git
+│       ├── update.py        # Looks on GitHub and installs with git
 │       └── weather.py       # Location, forecast and the WMO code table
 ├── tests/
 ├── DEPLOYMENT.md
@@ -151,7 +152,6 @@ All settings live in a single file, `data/config.json`:
 | `bed_up`         | Derived from `position_steps`, not maintained by hand     |
 | `kiosk`          | Fullscreen instead of a window                           |
 | `weather_location` | Selected weather location, `phone` follows the public IP |
-| `inverter_startup_seconds` | How long a movement waits after switching the inverter on (0-15) |
 | `rope_delay_seconds` | Extra wait before the bed leaves the top, for the ropes (0-20) |
 
 The file is written automatically when settings change, when the bed is moved and
@@ -186,9 +186,9 @@ Lowering from the very top waits a second time, for the safety ropes: **Seile l�
 while mains comes up, then "Seile lösen!" for the rest - and it only ever appears on the
 way down from the top, where the ropes actually are.
 
-Both waits are settings (**230V Anlauf** and **Seile lösen**). There is no switch to turn
-the automatic off - without it a movement has no power at all, which is not a mode worth
-offering.
+The start-up wait is fixed at five seconds, measured in the vehicle; only **Seile lösen**
+is a setting. There is no switch to turn the automatic off - without it a movement has no
+power at all, which is not a mode worth offering.
 
 Two deliberate choices:
 
@@ -235,6 +235,30 @@ The icons are drawn on a canvas rather than taken from emoji, because Unicode ha
 graded weather glyphs (there is exactly one "cloud with rain") and Tk renders emoji
 monochrome with gaps that differ between Windows and the Pi.
 
+## Weather warnings
+
+What MeteoSchweiz and Meteo-France issue, taken from the open MeteoAlarm Atom feeds.
+A warning marks the weather icon of the day it is in force on - today's on the big icon,
+a later one on that day's column - and tapping the marked icon opens the full text.
+Yellow, orange and red follow MeteoAlarm's own severities.
+
+The feeds shape what is possible here:
+
+- **No geometry.** Neither the feed entry nor the linked CAP document carries a polygon,
+  only a NUTS3 code and an area name. A warning can therefore only be matched to a place
+  whose region is written down in `LOCATIONS` - which is why **the phone position gets no
+  warnings**: it moves, and there is nothing to match it against.
+- The codes are NUTS **2013**, confirmed against the live feed (FR712 Ardeche, FR713
+  Drome, FR715 Loire in the official order). Area names are matched as well, because the
+  Swiss feed was empty while this was built and its identifiers could not be verified -
+  an unmatched area is logged, which is how the missing ones will surface.
+- The text is fetched while the connection is there, not when the window is opened, so a
+  warning read in the morning still opens in the evening. At most twelve detail requests
+  per refresh, one per document however many places share it.
+
+The MeteoAlarm EDR API would answer by coordinate and would solve the phone position, but
+its data queries need a membership (HTTP 401); only the feeds are open.
+
 ## Tracking
 
 ⚙ → "Historie" shows two long lived numbers, kept in `data/history.json`:
@@ -267,15 +291,16 @@ tethering and public WiFi often do.
 
 ## Updates
 
-A background check asks GitHub every 30 minutes whether the checkout is behind its
-remote branch (`git fetch` plus `git rev-list --count HEAD..@{u}`), and every 5 minutes
-while that fails - so the button turns up shortly after a connection comes back.
+The settings carry the version that is running - the checked-out commit and its date -
+and an **Install updates** button next to it. Nothing is checked in the background:
+looking and installing are one action, started by that button.
 
-When there is something to install, an "Update" button appears in the bottom bar.
-Pressing it discards the checked-in `data/config.json`, fast-forwards, writes the live
-config back and restarts the process with `os.execv`. Writing the config back is what
-keeps the bed position, the location and the delays across an update - without it, the
-pull would reset them to the committed values.
+It asks GitHub whether the checkout is behind its remote branch (`git fetch` plus
+`git rev-list --count HEAD..@{u}`). If it is not, it says so and stops. If it is, it
+discards the checked-in `data/config.json`, fast-forwards, writes the live config back
+and restarts the process with `os.execv`. Writing the config back is what keeps the bed
+position, the location and the delays across an update - without it, the pull would
+reset them to the committed values.
 
 The button is refused while the bed is moving, and only the two git steps are run: the
 app is an editable install, so a pull is enough for code changes. A release that changes

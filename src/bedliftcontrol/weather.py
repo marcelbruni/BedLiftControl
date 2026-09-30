@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from bedliftcontrol import alerts
+
 logger = logging.getLogger(__name__)
 
 WEATHER_FILE = str(Path(__file__).resolve().parents[2] / "data" / "weather.json")
@@ -39,6 +41,8 @@ class Location:
     label: str
     latitude: float | None = None
     longitude: float | None = None
+    # NUTS3 codes and area names the warning feeds use for this place, see LOCATIONS
+    regions: tuple = ()
 
     @property
     def follows_the_phone(self) -> bool:
@@ -49,13 +53,23 @@ PHONE_LOCATION = "phone"
 
 # Coordinates looked up once via the Open-Meteo geocoding API. Schilthorn exists twice
 # in that database; this is the Bernese one above Muerren, not the Valais peak.
+# The warning feeds carry no geometry, only NUTS3 codes and area names, so a place can
+# only be warned about if its region is written down here. The names are matched too,
+# because the Swiss feed was empty while this was built and its identifiers could not be
+# verified - an unmatched area is logged, which is how the missing ones will surface.
+# La Cure sits on the border and takes both sides.
 LOCATIONS = (
     Location(PHONE_LOCATION, "Handystandort"),
-    Location("hoefen", "Höfen bei Thun", 46.7210, 7.5644),
-    Location("chatel", "Châtel", 46.2649, 6.8403),
-    Location("lacure", "La Cure", 46.4647, 6.0742),
-    Location("schilthorn", "Schilthorn", 46.5573, 7.8349),
-    Location("cransmontana", "Crans-Montana", 46.3132, 7.4791),
+    Location("hoefen", "Höfen bei Thun", 46.7210, 7.5644,
+             ("CH021", "bern", "berne")),
+    Location("chatel", "Châtel", 46.2649, 6.8403,
+             ("FR718", "haute-savoie")),
+    Location("lacure", "La Cure", 46.4647, 6.0742,
+             ("FR432", "jura", "CH011", "vaud", "waadt")),
+    Location("schilthorn", "Schilthorn", 46.5573, 7.8349,
+             ("CH021", "bern", "berne")),
+    Location("cransmontana", "Crans-Montana", 46.3132, 7.4791,
+             ("CH012", "valais", "wallis")),
 )
 LOCATIONS_BY_KEY = {location.key: location for location in LOCATIONS}
 
@@ -279,7 +293,9 @@ class WeatherService:
         self._selected = location_or_default(selected).key
         self._last_phone_position = None
         self.history = history
-        self.readings: dict = self._load_cache()
+        self.readings: dict = {}
+        self.warnings: dict = {}
+        self._load_cache()
 
     @property
     def selected(self) -> str:
@@ -296,24 +312,35 @@ class WeatherService:
         with self._lock:
             return self.readings.get(key)
 
-    def _load_cache(self) -> dict:
+    def _load_cache(self) -> None:
+        """Readings and warnings alike: both have to survive a start without a network."""
         file = Path(self.path)
         if not file.exists():
-            return {}
+            return
         try:
             data = json.loads(file.read_text(encoding="utf-8"))
-            return {
+            self.readings = {
                 key: Weather.from_dict(value)
                 for key, value in data.get("readings", {}).items()
                 if key in LOCATIONS_BY_KEY
             }
+            self.warnings = {
+                key: [alerts.WeatherWarning.from_dict(entry) for entry in entries]
+                for key, entries in data.get("warnings", {}).items()
+                if key in LOCATIONS_BY_KEY
+            }
         except (ValueError, KeyError, TypeError, AttributeError, OSError) as error:
             logger.warning("Could not read weather cache %s (%s)", self.path, error)
-            return {}
+            self.readings = {}
+            self.warnings = {}
 
     def _save_cache(self) -> None:
         with self._lock:
-            payload = {"readings": {key: value.to_dict() for key, value in self.readings.items()}}
+            payload = {
+                "readings": {key: value.to_dict() for key, value in self.readings.items()},
+                "warnings": {key: [warning.to_dict() for warning in entries]
+                             for key, entries in self.warnings.items()},
+            }
         target = Path(self.path)
         temp = Path(str(target) + ".tmp")
         temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -330,9 +357,40 @@ class WeatherService:
             return False
         with self._lock:
             self.readings.update(dict(zip(keys, readings)))
+        self._refresh_warnings()
         self._save_cache()
         logger.info("Weather updated for %s", ", ".join(keys))
         return True
+
+    def _refresh_warnings(self) -> None:
+        """Official warnings for the places whose region is known.
+
+        Kept apart from the readings: a warning feed that cannot be read must not cost
+        us the weather, and the warnings we had stay on screen until better ones arrive.
+        """
+        found = alerts.fetch_warnings(LOCATIONS)
+        if not found:
+            return
+        with self._lock:
+            self.warnings.update(found)
+
+    def warnings_for(self, key: str) -> list:
+        """Every warning in force for a location, worst first."""
+        with self._lock:
+            entries = list(self.warnings.get(key, ()))
+        return sorted(entries, key=lambda warning: -warning.rank)
+
+    def warning_on(self, key: str, day: str):
+        """The worst warning covering `day` at that location, or None."""
+        for warning in self.warnings_for(key):
+            if warning.covers(day):
+                return warning
+        return None
+
+    def warned_locations(self) -> set:
+        """Keys of the locations that have any warning - for marking the dropdown."""
+        with self._lock:
+            return {key for key, entries in self.warnings.items() if entries}
 
     def _request_points(self) -> tuple:
         """Keys and (latitude, longitude, city) triples for the coming request.

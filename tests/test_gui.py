@@ -588,24 +588,18 @@ class TestStopButton:
         """'Bett oben' would be wrong and unsafe when the bed hangs half way."""
         from bedliftcontrol import gui as module
 
-        box = MagicMock()
-        monkeypatch.setattr(module, "messagebox", box)
         gui._move_context = MoveContext.UP
         controller.is_moving = False
         controller.at_top = False
         gui._poll_movement()
-        assert not box.showinfo.called
+        assert "secure" not in gui._open_windows
 
-    def test_rope_prompt_when_the_top_is_actually_reached(self, gui, controller, monkeypatch):
-        from bedliftcontrol import gui as module
-
-        box = MagicMock()
-        monkeypatch.setattr(module, "messagebox", box)
+    def test_rope_prompt_when_the_top_is_actually_reached(self, gui, controller):
         gui._move_context = MoveContext.UP
         controller.is_moving = False
         controller.at_top = True
         gui._poll_movement()
-        box.showinfo.assert_called_once()
+        assert "secure" in gui._open_windows
 
 
 class TestIconTableWindow:
@@ -731,48 +725,64 @@ class TestStopButtonLabel:
 
 
 class TestEndStopPrompts:
-    """What the bed says when it arrives at an end stop."""
+    """What the bed says when it arrives at an end stop. The prompt is a window of its
+    own, not a system dialog: it has to look like the rest of the app."""
 
-    @pytest.fixture
-    def box(self, monkeypatch):
+    @staticmethod
+    def arrive(gui, controller, context, at_top=False, at_bottom=False):
+        controller.is_moving = False
+        controller.at_top = at_top
+        controller.at_bottom = at_bottom
+        gui._move_context = context
+        gui._poll_movement()
+
+    def test_arriving_at_the_bottom_says_nothing(self, gui, controller):
+        """Mains switches itself off down there, so there is nothing left to instruct."""
+        self.arrive(gui, controller, MoveContext.DOWN, at_bottom=True)
+        assert "secure" not in gui._open_windows
+
+    def test_arriving_at_the_top_asks_for_the_ropes(self, gui, controller):
+        self.arrive(gui, controller, MoveContext.UP, at_top=True)
+        assert "secure" in gui._open_windows
+
+    def test_it_says_what_to_do(self, gui, controller):
+        import customtkinter
+
+        customtkinter.CTkLabel.reset_mock()
+        self.arrive(gui, controller, MoveContext.UP, at_top=True)
+        texts = [c.kwargs.get("text") for c in customtkinter.CTkLabel.call_args_list]
+        assert "Sicherungsseile anbringen!" in texts
+
+    def test_it_is_no_system_dialog(self, gui, controller, monkeypatch):
+        """A messagebox is the one window that ignores the CustomTkinter theme."""
         from bedliftcontrol import gui as module
 
-        fake = MagicMock()
-        monkeypatch.setattr(module, "messagebox", fake)
-        return fake
-
-    def test_arriving_at_the_bottom_says_nothing(self, gui, controller, box):
-        """Mains switches itself off down there, so there is nothing left to instruct."""
-        controller.is_moving = False
-        controller.at_bottom = True
-        gui._move_context = MoveContext.DOWN
-        gui._poll_movement()
+        box = MagicMock()
+        monkeypatch.setattr(module, "messagebox", box)
+        self.arrive(gui, controller, MoveContext.UP, at_top=True)
         assert not box.showinfo.called
 
-    def test_arriving_at_the_top_asks_for_the_ropes(self, gui, controller, box):
-        controller.is_moving = False
-        controller.at_top = True
-        controller.at_bottom = False
-        gui._move_context = MoveContext.UP
-        gui._poll_movement()
-        box.showinfo.assert_called_once_with("Bett sichern", "Sicherungsseile anbringen!")
+    def test_it_is_acknowledged_with_ok(self, gui, controller):
+        import customtkinter
 
-    def test_no_prompt_after_a_stop_in_between(self, gui, controller, box):
-        controller.is_moving = False
-        controller.at_bottom = False
-        controller.at_top = False
-        gui._move_context = MoveContext.UP
-        gui._poll_movement()
-        assert not box.showinfo.called
+        customtkinter.CTkButton.reset_mock()
+        self.arrive(gui, controller, MoveContext.UP, at_top=True)
+        assert "OK" in [c.kwargs.get("text") for c in customtkinter.CTkButton.call_args_list]
 
-    def test_the_two_arrival_branches_never_both_fire(self, gui, controller, box):
-        """at_top and at_bottom are mutually exclusive, but the branch must be too."""
-        controller.is_moving = False
-        controller.at_top = True
-        controller.at_bottom = True  # nonsense state, e.g. total_steps 0
-        gui._move_context = MoveContext.DOWN
-        gui._poll_movement()
-        assert box.showinfo.call_count <= 1
+    def test_it_sits_where_the_other_windows_sit(self, gui, controller):
+        self.arrive(gui, controller, MoveContext.UP, at_top=True)
+        window = gui._open_windows["secure"]
+        assert window.geometry.call_args.args[0].startswith("+")
+
+    def test_no_prompt_after_a_stop_in_between(self, gui, controller):
+        self.arrive(gui, controller, MoveContext.UP)
+        assert "secure" not in gui._open_windows
+
+    def test_arriving_twice_leaves_one_window(self, gui, controller):
+        self.arrive(gui, controller, MoveContext.UP, at_top=True)
+        first = gui._open_windows["secure"]
+        self.arrive(gui, controller, MoveContext.UP, at_top=True)
+        assert gui._open_windows["secure"] is not first
 
 
 class TestCorrectionsButtonGating:
@@ -1276,6 +1286,9 @@ class TestInverterBeforeMoving:
 
 
 class TestInverterSettings:
+    """The start-up delay used to be a slider. It is fixed now, so the settings must
+    not offer it any more - and the inverter must still wait."""
+
     @pytest.fixture
     def settings(self, controller, weather):
         import customtkinter
@@ -1283,62 +1296,171 @@ class TestInverterSettings:
         inverter = FakeInverter()
         built = BedGui(controller, weather, inverter=inverter)
         customtkinter.CTkSlider.reset_mock()
+        customtkinter.CTkLabel.reset_mock()
         customtkinter.CTkButton.reset_mock()
         built._settings_window()
         return built, inverter
 
     @staticmethod
-    def button_texts():
+    def texts(widget):
         import customtkinter
 
-        return [c.kwargs.get("text") for c in customtkinter.CTkButton.call_args_list]
+        return [c.kwargs.get("text") for c in getattr(customtkinter, widget).call_args_list]
+
+    def test_no_row_for_the_start_up_delay(self, settings):
+        assert not any("230V" in (text or "") for text in self.texts("CTkLabel"))
+
+    def test_no_switch_for_the_automatic(self, settings):
+        """It was removed: without it a movement has no power, which is not an option
+        worth offering."""
+        assert not any("Automatik" in (text or "") for text in self.texts("CTkButton"))
+
+    def test_the_delay_is_five_seconds(self):
+        from bedliftcontrol.inverter import STARTUP_SECONDS
+
+        assert STARTUP_SECONDS == 5.0
+
+    def test_the_config_no_longer_carries_it(self):
+        from bedliftcontrol.config import Config
+
+        assert not hasattr(Config(), "inverter_startup_seconds")
 
 
-    def test_the_delay_slider_spans_zero_to_fifteen(self, settings):
+class TestSettingsLabels:
+    """Everything the panel says is German."""
+
+    @pytest.fixture
+    def opened(self, controller, weather):
+        import customtkinter
+
+        built = BedGui(controller, weather, updater=FakeUpdater())
+        customtkinter.CTkLabel.reset_mock()
+        customtkinter.CTkButton.reset_mock()
+        customtkinter.CTkSlider.reset_mock()
+        built._settings_window()
+        return built
+
+    @staticmethod
+    def texts(widget):
+        import customtkinter
+
+        return [c.kwargs.get("text") for c in getattr(customtkinter, widget).call_args_list]
+
+    @pytest.mark.parametrize("label", ["Anzahl Schritte", "Geschwindigkeit PPS",
+                                       "Seile lösen", "Ort"])
+    def test_the_rows_are_named_in_german(self, opened, label):
+        assert label in self.texts("CTkLabel")
+
+    @pytest.mark.parametrize("gone", ["total steps", "speed pps"])
+    def test_the_english_names_are_gone(self, opened, gone):
+        assert gone not in self.texts("CTkLabel")
+
+    def test_the_update_button_is_german(self, opened):
+        assert "Updates installieren" in self.texts("CTkButton")
+        assert gui_module.UPDATE_BUTTON_TEXT == "Updates installieren"
+
+
+class TestVersionRow:
+    """Version and update button share the width of the button row above them, so all
+    three bottom rows line up on both edges."""
+
+    @pytest.fixture
+    def opened(self, controller, weather):
+        import customtkinter
+
+        built = BedGui(controller, weather, updater=FakeUpdater())
+        customtkinter.CTkFrame.reset_mock()
+        built._settings_window()
+        return built
+
+    @staticmethod
+    def version_frame():
+        import customtkinter
+
+        rows = [c.kwargs for c in customtkinter.CTkFrame.call_args_list
+                if c.kwargs.get("width") == gui_module.SETTINGS_ROW_WIDTH]
+        assert rows, "no row the width of the button block"
+        return rows[0]
+
+    def test_it_is_as_wide_as_the_button_row(self, opened):
+        assert self.version_frame()["width"] == gui_module.SETTINGS_ROW_WIDTH
+
+    def test_it_keeps_that_width(self, controller, weather):
+        """Without this the frame shrinks around its two children and drifts inwards.
+        It has to be pack, not grid: the two children are packed."""
+        import customtkinter
+
+        made = []
+
+        def record(*args, **kwargs):
+            widget = _widget_mock()
+            made.append((kwargs, widget))
+            return widget
+
+        customtkinter.CTkFrame.side_effect = record
+        built = BedGui(controller, weather, updater=FakeUpdater())
+        built._settings_window()
+        rows = [widget for kwargs, widget in made
+                if kwargs.get("width") == gui_module.SETTINGS_ROW_WIDTH]
+        assert len(rows) == 1
+        rows[0].pack_propagate.assert_called_once_with(False)
+        assert not rows[0].grid_propagate.called
+
+    def test_the_height_is_fixed_too(self, opened):
+        """pack_propagate(False) freezes both, so the height has to be given."""
+        assert self.version_frame()["height"] == gui_module.VERSION_ROW_HEIGHT
+
+    def test_the_close_button_spans_the_same_width(self, opened):
+        import customtkinter
+
+        widths = [c.kwargs.get("width") for c in customtkinter.CTkButton.call_args_list
+                  if c.kwargs.get("text") == "Schliessen"]
+        assert gui_module.SETTINGS_ROW_WIDTH in widths
+
+    def test_the_window_is_measured_not_fixed(self, opened):
+        """The German labels are wider than the English ones were; a hard-coded width
+        cut the value column off."""
+        window = opened._open_windows["settings"]
+        first = str(window.geometry.call_args_list[0].args[0])
+        assert "520x" not in first
+
+    def test_it_fits_the_pi_panel(self, controller, weather):
+        """566x384 beside the bar has to stay inside 800x480."""
+        from bedliftcontrol.gui import SETTINGS_ROW_WIDTH, WINDOW_PAD
+
+        assert SETTINGS_ROW_WIDTH + 2 * WINDOW_PAD + 60 <= 800
+
+
+class TestSpeedSlider:
+    @pytest.fixture
+    def opened(self, controller, weather):
+        import customtkinter
+
+        built = BedGui(controller, weather)
+        customtkinter.CTkSlider.reset_mock()
+        built._settings_window()
+        return built
+
+    def test_it_spans_four_hundred_to_a_thousand(self, opened):
         import customtkinter
 
         bounds = [(c.kwargs.get("from_"), c.kwargs.get("to"))
                   for c in customtkinter.CTkSlider.call_args_list]
-        assert (0.0, 15.0) in bounds
+        assert (400, 1000) in bounds
 
-    def test_the_delay_slider_snaps_to_whole_seconds(self, settings):
-        import customtkinter
+    def test_the_default_is_seven_hundred(self):
+        from bedliftcontrol.config import DEFAULT_SPEED_PPS, Config
 
-        steps = [c.kwargs.get("number_of_steps") for c in customtkinter.CTkSlider.call_args_list]
-        assert 15 in steps
+        assert DEFAULT_SPEED_PPS == 700.0
+        assert Config().speed_pps == 700.0
 
-    def test_moving_the_slider_stores_the_value(self, settings, controller):
-        built, _ = settings
-        built._on_inverter_delay_change(4.0)
-        assert controller.config.inverter_startup_seconds == 4.0
-        controller.config.save.assert_called()
+    def test_the_default_sits_inside_the_range(self):
+        """A slider cannot show a value it has no position for."""
+        from bedliftcontrol.config import DEFAULT_SPEED_PPS
 
-    def test_moving_the_slider_reaches_the_inverter(self, settings):
-        """Otherwise the new value would only take effect after a restart."""
-        built, inverter = settings
-        built._on_inverter_delay_change(3.0)
-        assert inverter.startup_seconds == 3.0
+        assert gui_module.SPEED_MIN <= DEFAULT_SPEED_PPS <= gui_module.SPEED_MAX
 
-    def test_a_slider_position_between_seconds_is_rounded(self, settings, controller):
-        built, _ = settings
-        built._on_inverter_delay_change(6.4)
-        assert controller.config.inverter_startup_seconds == 6.0
 
-    def test_the_value_is_shown_next_to_the_slider(self, settings):
-        built, _ = settings
-        built._on_inverter_delay_change(7.0)
-        built._delay_value_label.configure.assert_called_with(text="7 s")
-
-    def test_zero_seconds_can_be_set(self, settings, controller):
-        built, inverter = settings
-        built._on_inverter_delay_change(0.0)
-        assert controller.config.inverter_startup_seconds == 0.0
-        assert inverter.startup_seconds == 0.0
-
-    def test_no_switch_for_the_automatic(self):
-        """It was removed: without it a movement has no power, which is not an option
-        worth offering."""
-        assert not any("Automatik" in (text or "") for text in self.button_texts())
 class TestPowerAfterMoving:
     """Mains is switched off again once the bed is parked at an end stop."""
 
@@ -1365,6 +1487,7 @@ class TestPowerAfterMoving:
     def test_arriving_at_the_top_switches_it_off(self, running, controller, box):
         built, inverter = running
         self.arrive(built, controller, MoveContext.UP, at_top=True)
+        built._on_window_closed("secure")
         assert inverter.on is False
 
     def test_arriving_at_the_bottom_switches_it_off(self, running, controller, box):
@@ -1375,15 +1498,23 @@ class TestPowerAfterMoving:
     def test_the_rope_prompt_comes_while_mains_is_still_on(self, running, controller, box):
         """The motors hold the bed until the ropes are on; only the OK cuts the power."""
         built, inverter = running
-        seen = []
-        box.showinfo.side_effect = lambda *args, **kwargs: seen.append(inverter.on)
         self.arrive(built, controller, MoveContext.UP, at_top=True)
-        assert seen == [True]
+        assert inverter.on is True, "the ropes go on while the motors still hold it"
+        built._on_window_closed("secure")
         assert inverter.on is False
+
+    def test_a_movement_started_from_the_prompt_keeps_mains(self, running, controller, box):
+        """Closing the window must not cut the power out from under a new movement."""
+        built, inverter = running
+        self.arrive(built, controller, MoveContext.UP, at_top=True)
+        controller.is_moving = True
+        built._on_window_closed("secure")
+        assert inverter.on is True
 
     def test_the_button_follows(self, running, controller, box):
         built, inverter = running
         self.arrive(built, controller, MoveContext.UP, at_top=True)
+        built._on_window_closed("secure")
         assert built.power_button.configure.call_args.kwargs["fg_color"] == gui_module.POWER_OFF_COLOR
 
     def test_a_stop_in_between_leaves_it_running(self, running, controller, box):
@@ -1412,6 +1543,7 @@ class TestPowerAfterMoving:
         elapsed[0] += 30
         built._wait_before_move()
         self.arrive(built, controller, MoveContext.UP, at_top=True)
+        built._on_window_closed("secure")
         assert inverter.on is False
         assert built.power_button.configure.call_args.kwargs["fg_color"] == gui_module.POWER_OFF_COLOR
 
@@ -1602,11 +1734,13 @@ class TestRopeDelaySetting:
         settings._on_rope_delay_change(6.7)
         assert controller.config.rope_delay_seconds == 7.0
 
-    def test_the_two_delays_are_separate_settings(self, settings, controller):
+    def test_it_comes_on_top_of_the_fixed_start_up(self, settings, controller):
+        """The inverter start-up is no longer a setting; this delay is the only one left."""
+        from bedliftcontrol.inverter import STARTUP_SECONDS
+
         settings._on_rope_delay_change(3.0)
-        settings._on_inverter_delay_change(12.0)
         assert controller.config.rope_delay_seconds == 3.0
-        assert controller.config.inverter_startup_seconds == 12.0
+        assert STARTUP_SECONDS == 5.0
 
 
 class TestWeekdayLabel:
@@ -1714,8 +1848,10 @@ class TestWindowPlacement:
         """geometry() with only a position keeps the size that was set before it."""
         positioned._settings_window()
         window = positioned._open_windows["settings"]
-        sizes = [c.args[0] for c in window.geometry.call_args_list]
-        assert sizes[0] == "520x390" and sizes[-1] == "+60+0"
+        calls = [str(c.args[0]) for c in window.geometry.call_args_list]
+        assert len(calls) >= 2
+        assert "x" in calls[0] and not calls[0].startswith("+")
+        assert calls[-1] == "+60+0"
 
 
 class TestMidnightRollover:
@@ -1807,94 +1943,120 @@ class TestMidnightRollover:
 
 
 class FakeUpdater:
-    def __init__(self, pending=0, succeeds=True):
-        self.pending = pending
-        self.succeeds = succeeds
-        self.applied = 0
+    def __init__(self, outcome=None, version="e28a2d1 · 29.09.2026 21:52"):
+        from bedliftcontrol import update
 
-    @property
-    def update_available(self):
-        return self.pending > 0
+        self.outcome = outcome if outcome is not None else update.UPDATED
+        self._version = version
+        self.installs = 0
 
-    def apply(self):
-        self.applied += 1
-        if self.succeeds:
-            self.pending = 0
-        return self.succeeds
+    def install(self):
+        self.installs += 1
+        return self.outcome
+
+    def version(self):
+        return self._version
 
 
-class TestUpdateButton:
-    """The button exists only while something is waiting on GitHub."""
+class TestInstallUpdates:
+    """The button lives in the settings and does the looking itself."""
 
     @pytest.fixture
-    def waiting(self, controller, weather, monkeypatch):
+    def settings(self, controller, weather, monkeypatch):
         monkeypatch.setattr(gui_module.os, "execv", MagicMock())
-        updater = FakeUpdater(pending=2)
+        updater = FakeUpdater()
         built = BedGui(controller, weather, updater=updater)
+        built._settings_window()
         return built, updater
 
-    def test_it_is_hidden_without_an_update(self, controller, weather):
+    def test_the_menu_bar_has_no_update_button(self, controller, weather):
+        """It used to sit in the bar and wait for a background check."""
         built = BedGui(controller, weather, updater=FakeUpdater())
-        built.update_button.pack.reset_mock()
-        built._refresh_update_button()
-        built.update_button.pack_forget.assert_called()
-        assert not built.update_button.pack.called
+        assert not hasattr(built, "update_button")
 
-    def test_it_appears_once_there_is_one(self, waiting):
-        built, _ = waiting
-        built._refresh_update_button()
-        built.update_button.pack.assert_called()
+    def test_nothing_is_checked_in_the_background(self, controller, weather):
+        updater = FakeUpdater()
+        BedGui(controller, weather, updater=updater)
+        assert updater.installs == 0
 
-    def test_it_keeps_looking(self, waiting):
-        built, _ = waiting
-        built.app.after.reset_mock()
-        built._refresh_update_button()
-        delays = [c.args[0] for c in built.app.after.call_args_list]
-        assert gui_module.UPDATE_POLL_MS in delays
+    def test_the_settings_offer_the_button(self, settings):
+        import customtkinter
 
-    def test_pressing_it_pulls(self, waiting):
-        built, updater = waiting
+        labels = [c.kwargs.get("text") for c in customtkinter.CTkButton.call_args_list]
+        assert gui_module.UPDATE_BUTTON_TEXT in labels
+
+    def test_the_settings_show_the_version(self, settings):
+        import customtkinter
+
+        texts = [c.kwargs.get("text", "") for c in customtkinter.CTkLabel.call_args_list]
+        assert any("e28a2d1 · 29.09.2026 21:52" in text for text in texts)
+
+    def test_pressing_it_installs(self, settings):
+        built, updater = settings
         built._run_update()
-        assert updater.applied == 1
+        assert updater.installs == 1
 
-    def test_a_successful_update_restarts_the_app(self, waiting, monkeypatch):
-        built, _ = waiting
+    def test_a_successful_update_restarts_the_app(self, settings, monkeypatch):
+        from bedliftcontrol import update
+
+        built, _ = settings
         restarted = []
         monkeypatch.setattr(built, "_restart", lambda: restarted.append(True))
-        built._update_finished(True)
+        built._update_finished(update.UPDATED)
         assert restarted == [True]
 
-    def test_a_failed_update_says_so_and_keeps_the_button(self, waiting, monkeypatch):
-        built, _ = waiting
+    def test_being_up_to_date_says_so_without_restarting(self, settings, monkeypatch):
+        from bedliftcontrol import update
+
+        built, _ = settings
+        box = MagicMock()
+        monkeypatch.setattr(gui_module, "messagebox", box)
+        monkeypatch.setattr(built, "_restart", MagicMock())
+        built._on_update()
+        built._update_finished(update.UP_TO_DATE)
+        box.showinfo.assert_called_once()
+        assert not built._restart.called
+
+    def test_a_failure_says_so_and_frees_the_button(self, settings, monkeypatch):
+        from bedliftcontrol import update
+
+        built, _ = settings
         box = MagicMock()
         monkeypatch.setattr(gui_module, "messagebox", box)
         built._on_update()
-        built._update_finished(False)
+        built._update_finished(update.FAILED)
         box.showerror.assert_called_once()
-        assert built.update_button.configure.call_args.kwargs["state"] == "normal"
+        assert built._update_button.configure.call_args.kwargs["state"] == "normal"
 
-    def test_it_will_not_pull_out_from_under_a_moving_bed(self, waiting, controller):
-        built, updater = waiting
+    def test_the_button_says_it_is_working(self, settings, monkeypatch):
+        monkeypatch.setattr(gui_module.threading, "Thread", MagicMock())
+        built, _ = settings
+        built._on_update()
+        assert built._update_button.configure.call_args.kwargs["state"] == "disabled"
+
+    def test_it_will_not_pull_out_from_under_a_moving_bed(self, settings, controller):
+        built, updater = settings
         controller.is_moving = True
         built._on_update()
-        assert updater.applied == 0
+        assert updater.installs == 0
 
-    def test_a_second_press_while_running_is_ignored(self, waiting, monkeypatch):
-        built, updater = waiting
+    def test_a_second_press_while_running_is_ignored(self, settings, monkeypatch):
+        built, _ = settings
         monkeypatch.setattr(gui_module.threading, "Thread", MagicMock())
         built._on_update()
         built._on_update()
         assert gui_module.threading.Thread.call_count == 1
 
-    def test_the_button_stays_put_while_the_update_runs(self, waiting, monkeypatch):
-        """pack_forget mid-update would make the button jump away under the finger."""
-        built, updater = waiting
+    def test_closing_the_settings_mid_update_breaks_nothing(self, settings, monkeypatch):
+        """The window is a child of nothing; the pull outlives it."""
+        from bedliftcontrol import update
+
+        built, _ = settings
         monkeypatch.setattr(gui_module.threading, "Thread", MagicMock())
+        monkeypatch.setattr(gui_module, "messagebox", MagicMock())
         built._on_update()
-        updater.pending = 0
-        built.update_button.pack_forget.reset_mock()
-        built._refresh_update_button()
-        assert not built.update_button.pack_forget.called
+        built._on_window_closed("settings")
+        built._update_finished(update.FAILED)  # must not raise
 
 
 class TestRestart:
@@ -2051,18 +2213,18 @@ class TestBarLayout:
         BedGui(controller, weather)
         bar_buttons = [c.kwargs for c in customtkinter.CTkButton.call_args_list
                        if c.kwargs.get("height") == gui_module.BAR_BUTTON_HEIGHT]
-        assert len(bar_buttons) == 4, "settings, corrections, 230V, update"
+        assert len(bar_buttons) == 3, "settings, corrections, 230V"
         assert {kwargs["width"] for kwargs in bar_buttons} == {gui_module.BAR_BUTTON_WIDTH}
 
-    def test_the_widest_label_sets_that_width(self, controller, weather):
-        """Update is the longest word in the bar; nothing may be narrower than it."""
+    def test_the_width_holds_the_longest_label(self, controller, weather):
+        """230V is the longest word left in the bar; nothing may be narrower than it."""
         import customtkinter
 
         customtkinter.CTkButton.reset_mock()
         BedGui(controller, weather)
         widths = {c.kwargs.get("text"): c.kwargs.get("width")
                   for c in customtkinter.CTkButton.call_args_list}
-        assert widths["Update"] == gui_module.BAR_BUTTON_WIDTH
+        assert widths["230V"] == gui_module.BAR_BUTTON_WIDTH
 
     def test_the_labels_use_the_bigger_bar_font(self, controller, weather):
         import customtkinter
@@ -2074,10 +2236,10 @@ class TestBarLayout:
         assert gui_module.BAR_FONT_SIZE in sizes
         fonts = [c.kwargs.get("font") for c in customtkinter.CTkButton.call_args_list
                  if c.kwargs.get("height") == gui_module.BAR_BUTTON_HEIGHT]
-        assert len(fonts) == 4 and all(font is not None for font in fonts)
+        assert len(fonts) == 3 and all(font is not None for font in fonts)
 
     def test_one_font_serves_the_whole_bar(self, controller, weather):
-        """Four identical CTkFonts would be four objects doing the same job."""
+        """Identical CTkFonts would be several objects doing the same job."""
         import customtkinter
 
         customtkinter.CTkButton.reset_mock()
@@ -2111,3 +2273,146 @@ class TestBarLayout:
                    if c.kwargs.get("height") in (gui_module.CLOCK_TIME_HEIGHT,
                                                  gui_module.CLOCK_DATE_HEIGHT)]
         assert anchors == ["e", "e"]
+
+
+class TestWarnings:
+    """A warning marks the icon of the day it is in force on, and opens on a tap.
+    Nothing may move: the marker is drawn onto the icon, not placed beside it."""
+
+    TODAY = FIXED_TODAY
+
+    @staticmethod
+    def warning(onset, expires, severity="Severe", **extra):
+        from bedliftcontrol.alerts import WeatherWarning
+
+        return WeatherWarning("Thunderstorm", severity, "Bern", onset, expires, **extra)
+
+    @pytest.fixture
+    def warned(self, gui, weather):
+        from bedliftcontrol.weather import DailyForecast, Weather
+
+        days = ["2026-09-03", "2026-09-04", "2026-09-05"]
+        daily = [DailyForecast(name, date, "sun", 20.0, 9.0, 10, "Klar")
+                 for name, date in zip(("Do", "Fr", "Sa"), days)]
+        weather.current = Weather("Thun", 21.0, "Klar", "sun", f"{self.TODAY}T08:00",
+                                  daily=daily)
+        today = self.warning(f"{self.TODAY}T12:00:00+00:00", f"{self.TODAY}T20:00:00+00:00")
+        later = self.warning("2026-09-05T06:00:00+00:00", "2026-09-05T18:00:00+00:00",
+                             severity="Moderate")
+        answers = {self.TODAY: today, "2026-09-05": later}
+        weather.warning_on.side_effect = lambda key, day: answers.get(day)
+        weather.warnings_for.return_value = [today]
+        weather.warned_locations.return_value = {"chatel"}
+        return gui, answers
+
+    def test_todays_warning_marks_the_big_icon(self, warned, monkeypatch):
+        """The canvas is real here, so its show() has to be replaced to be watched."""
+        gui, answers = warned
+        shown = MagicMock()
+        monkeypatch.setattr(gui.weather_icon, "show", shown)
+        gui._apply_weather()
+        shown.assert_called_with("sun", answers[FIXED_TODAY].color)
+
+    def test_a_quiet_day_leaves_the_icon_alone(self, gui, weather, monkeypatch):
+        from bedliftcontrol.weather import Weather
+
+        weather.current = Weather("Thun", 21.0, "Klar", "sun", f"{FIXED_TODAY}T08:00")
+        weather.warning_on.return_value = None
+        shown = MagicMock()
+        monkeypatch.setattr(gui.weather_icon, "show", shown)
+        gui._apply_weather()
+        shown.assert_called_with("sun", None)
+
+    def test_the_forecast_marks_only_the_warned_day(self, warned, monkeypatch):
+        gui, answers = warned
+        drawn = []
+        monkeypatch.setattr(gui_module.icons, "IconCanvas",
+                            lambda master, size, background: MagicMock())
+        gui._apply_weather()
+        for label in gui._forecast_labels:
+            if hasattr(label, "show") and label.show.call_args:
+                drawn.append(label.show.call_args.args)
+        assert (("sun", None) in drawn) and (("sun", answers["2026-09-05"].color) in drawn)
+
+    def test_a_new_warning_redraws_the_week(self, warned):
+        """The forecast only rebuilds when its key changes, so the warning is in it."""
+        gui, _ = warned
+        gui._apply_weather()
+        first = gui._rendered_forecast_key
+        gui.weather.warning_on.side_effect = lambda key, day: None
+        gui._apply_weather()
+        assert gui._rendered_forecast_key != first
+
+    def test_tapping_a_warned_day_opens_the_window(self, warned):
+        gui, _ = warned
+        gui._warning_window(FIXED_TODAY)
+        assert "warning" in gui._open_windows
+
+    def test_tapping_a_quiet_day_opens_nothing(self, warned):
+        gui, _ = warned
+        gui._warning_window("2026-09-04")
+        assert "warning" not in gui._open_windows
+
+    def test_the_window_shows_the_text(self, gui, weather):
+        import customtkinter
+
+        warning = self.warning(f"{FIXED_TODAY}T12:00:00+00:00", f"{FIXED_TODAY}T20:00:00+00:00",
+                               headline="Gewitterwarnung", description="Hagel und Boeen.",
+                               instruction="Fahrzeuge sichern.", sender="MeteoSchweiz")
+        weather.warning_on.side_effect = lambda key, day: warning
+        customtkinter.CTkLabel.reset_mock()
+        gui._warning_window(FIXED_TODAY)
+        texts = [c.kwargs.get("text", "") for c in customtkinter.CTkLabel.call_args_list]
+        assert "Gewitterwarnung" in texts
+        assert "Hagel und Boeen." in texts
+        assert "Fahrzeuge sichern." in texts
+        assert any("MeteoSchweiz" in text for text in texts)
+
+    def test_the_window_names_area_and_time(self, gui, weather):
+        warning = self.warning(f"{FIXED_TODAY}T12:00:00+00:00", f"{FIXED_TODAY}T20:00:00+00:00")
+        assert "Bern" in gui._warning_subtitle(warning)
+        assert "03.09. 12:00" in gui._warning_subtitle(warning)
+
+    def test_an_unreadable_timestamp_leaves_the_subtitle_short(self, gui):
+        warning = self.warning("gestern", "morgen")
+        assert gui._warning_subtitle(warning) == "Bern"
+
+    def test_the_window_has_a_close_button(self, gui, weather):
+        import customtkinter
+
+        warning = self.warning(f"{FIXED_TODAY}T12:00:00+00:00", f"{FIXED_TODAY}T20:00:00+00:00")
+        weather.warning_on.side_effect = lambda key, day: warning
+        customtkinter.CTkButton.reset_mock()
+        gui._warning_window(FIXED_TODAY)
+        assert "Schliessen" in [c.kwargs.get("text") for c in customtkinter.CTkButton.call_args_list]
+
+    def test_a_second_day_replaces_the_window(self, warned):
+        """Two taps must not leave two windows stacked on each other."""
+        gui, _ = warned
+        gui._warning_window(FIXED_TODAY)
+        first = gui._open_windows["warning"]
+        gui._warning_window("2026-09-05")
+        assert gui._open_windows["warning"] is not first
+
+
+class TestWarnedLocationsInTheDropdown:
+    def test_a_warned_location_is_marked(self, gui, weather):
+        weather.warned_locations.return_value = {"chatel"}
+        labels = gui._location_labels()
+        assert f"{gui_module.WARNING_MARKER}Châtel" in labels
+
+    def test_the_others_stay_plain(self, gui, weather):
+        weather.warned_locations.return_value = {"chatel"}
+        assert "Schilthorn" in gui._location_labels()
+
+    def test_choosing_a_marked_entry_still_works(self, gui, weather):
+        """The marker is part of the label, so it has to come off again."""
+        weather.warned_locations.return_value = {"chatel"}
+        gui._on_location_chosen(f"{gui_module.WARNING_MARKER}Châtel")
+        weather.select.assert_called_once_with("chatel")
+
+    def test_the_dropdown_opens_on_the_marked_label(self, gui, weather):
+        weather.selected = "chatel"
+        weather.warned_locations.return_value = {"chatel"}
+        gui._settings_window()
+        gui._location_menu.set.assert_called_once_with(f"{gui_module.WARNING_MARKER}Châtel")

@@ -555,3 +555,119 @@ class TestReadingDate:
         from bedliftcontrol.weather import Weather
 
         assert Weather("Thun", 21.0, "Klar", "sun", "2026-09-23T10:37").date == "2026-09-23"
+
+
+def _service_with_stubbed_fetch(tmp_path, monkeypatch, weather_module, path=None):
+    """A service whose forecast request is answered from memory."""
+    from bedliftcontrol.weather import Weather, WeatherService
+
+    monkeypatch.setattr(weather_module, "fetch_location",
+                        lambda: (46.7, 7.5, "Thun"))
+    monkeypatch.setattr(
+        weather_module, "fetch_weather_batch",
+        lambda points: [Weather("Thun", 20.0, "Klar", "sun", "2026-09-30T08:00")
+                        for _ in points])
+    return WeatherService(path=str(path or (tmp_path / "weather.json")))
+
+
+class TestWarningsInTheService:
+    """Warnings live next to the readings: cached to disk, kept when a feed fails."""
+
+    @staticmethod
+    def warning(area="Bern", severity="Severe"):
+        from bedliftcontrol.alerts import WeatherWarning
+
+        return WeatherWarning("Thunderstorm", severity, area,
+                              "2026-09-30T12:00:00+00:00", "2026-09-30T20:00:00+00:00",
+                              headline="Gewitter", description="Hagel")
+
+    def test_a_refresh_collects_them(self, tmp_path, monkeypatch):
+        from bedliftcontrol import alerts, weather as weather_module
+
+        monkeypatch.setattr(alerts, "fetch_warnings",
+                            lambda locations: {"hoefen": [self.warning()]})
+        service = _service_with_stubbed_fetch(tmp_path, monkeypatch, weather_module)
+        service.refresh_once()
+        assert [w.area for w in service.warnings_for("hoefen")] == ["Bern"]
+
+    def test_they_survive_a_restart(self, tmp_path, monkeypatch):
+        from bedliftcontrol import alerts, weather as weather_module
+        from bedliftcontrol.weather import WeatherService
+
+        monkeypatch.setattr(alerts, "fetch_warnings",
+                            lambda locations: {"hoefen": [self.warning()]})
+        path = tmp_path / "weather.json"
+        service = _service_with_stubbed_fetch(tmp_path, monkeypatch, weather_module, path)
+        service.refresh_once()
+        again = WeatherService(path=str(path))
+        assert again.warnings_for("hoefen")[0].headline == "Gewitter"
+
+    def test_a_failing_feed_keeps_the_old_ones(self, tmp_path, monkeypatch):
+        from bedliftcontrol import alerts, weather as weather_module
+
+        monkeypatch.setattr(alerts, "fetch_warnings",
+                            lambda locations: {"hoefen": [self.warning()]})
+        service = _service_with_stubbed_fetch(tmp_path, monkeypatch, weather_module)
+        service.refresh_once()
+        monkeypatch.setattr(alerts, "fetch_warnings", lambda locations: {})
+        service.refresh_once()
+        assert service.warnings_for("hoefen"), "offline is not the same as all clear"
+
+    def test_the_worst_one_comes_first(self, tmp_path, monkeypatch):
+        from bedliftcontrol import alerts, weather as weather_module
+
+        monkeypatch.setattr(alerts, "fetch_warnings", lambda locations: {
+            "hoefen": [self.warning(severity="Moderate"), self.warning(severity="Extreme")]})
+        service = _service_with_stubbed_fetch(tmp_path, monkeypatch, weather_module)
+        service.refresh_once()
+        assert service.warnings_for("hoefen")[0].severity == "Extreme"
+
+    def test_it_answers_per_day(self, tmp_path, monkeypatch):
+        from bedliftcontrol import alerts, weather as weather_module
+
+        monkeypatch.setattr(alerts, "fetch_warnings",
+                            lambda locations: {"hoefen": [self.warning()]})
+        service = _service_with_stubbed_fetch(tmp_path, monkeypatch, weather_module)
+        service.refresh_once()
+        assert service.warning_on("hoefen", "2026-09-30") is not None
+        assert service.warning_on("hoefen", "2026-10-01") is None
+
+    def test_it_lists_the_warned_locations(self, tmp_path, monkeypatch):
+        from bedliftcontrol import alerts, weather as weather_module
+
+        monkeypatch.setattr(alerts, "fetch_warnings",
+                            lambda locations: {"hoefen": [self.warning()], "chatel": []})
+        service = _service_with_stubbed_fetch(tmp_path, monkeypatch, weather_module)
+        service.refresh_once()
+        assert service.warned_locations() == {"hoefen"}
+
+
+class TestWarningRegions:
+    """The feeds carry no geometry, so a place is only warned about if its region is
+    written down - and the phone position deliberately has none."""
+
+    def test_the_fixed_places_know_their_region(self):
+        from bedliftcontrol.weather import LOCATIONS, PHONE_LOCATION
+
+        for place in LOCATIONS:
+            if place.key != PHONE_LOCATION:
+                assert place.regions, place.key
+
+    def test_the_phone_position_has_none(self):
+        from bedliftcontrol.weather import LOCATIONS_BY_KEY, PHONE_LOCATION
+
+        assert LOCATIONS_BY_KEY[PHONE_LOCATION].regions == ()
+
+    def test_chatel_carries_the_verified_code(self):
+        """FR718 = Haute-Savoie, confirmed against the live feed (FR712 Ardeche,
+        FR713 Drome, FR715 Loire all matched the official NUTS 2013 order)."""
+        from bedliftcontrol.weather import LOCATIONS_BY_KEY
+
+        assert "FR718" in LOCATIONS_BY_KEY["chatel"].regions
+
+    def test_the_border_village_takes_both_sides(self):
+        from bedliftcontrol.weather import LOCATIONS_BY_KEY
+
+        regions = LOCATIONS_BY_KEY["lacure"].regions
+        assert any(code.startswith("FR") for code in regions)
+        assert any(code.startswith("CH") for code in regions)

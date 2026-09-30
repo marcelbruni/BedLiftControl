@@ -17,10 +17,9 @@ import RPi.GPIO as GPIO
 logger = logging.getLogger(__name__)
 
 INVERTER_PIN = 17
-# The inverter reports its output as stable well before the load side has settled; ten
-# seconds is the upper end of what the manual's start-up takes, and waiting a moment too
-# long costs nothing next to a movement that starts without power.
-STARTUP_SECONDS = 10.0
+# Measured in the vehicle: five seconds is reliably enough for the output to carry the
+# motors. The manual's start-up figure is the upper end for a cold unit under load.
+STARTUP_SECONDS = 5.0
 
 
 class Inverter:

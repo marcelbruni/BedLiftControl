@@ -17,19 +17,22 @@ import customtkinter as ctk
 
 from bedliftcontrol import clock, icons
 from bedliftcontrol.config import (
-    INVERTER_STARTUP_MAX,
-    INVERTER_STARTUP_MIN,
     ROPE_DELAY_MAX,
     ROPE_DELAY_MIN,
 )
 from bedliftcontrol.controller import BedController
 from bedliftcontrol.inverter import Inverter
 from bedliftcontrol.timesync import TimeSync
-from bedliftcontrol.update import UpdateChecker
+from bedliftcontrol import update
+from bedliftcontrol.update import Updater
 from bedliftcontrol.weather import LOCATIONS, WEATHER_CODES, WeatherService, location_or_default
 
 logger = logging.getLogger(__name__)
 
+SECURE_WINDOW_WIDTH = 360
+WARNING_WINDOW_WIDTH = 460
+WARNING_TEXT_WIDTH = 420
+WARNING_MARKER = "! "  # prefixes a warned location in the dropdown
 WINDOW_GEOMETRY = "800x420"  # the Pi 7" display is 800x480, kiosk mode takes all of it
 APPEARANCE_MODE = "dark"
 COLOR_THEME = "green"
@@ -61,8 +64,8 @@ CORRECTION_ROW_WIDTH = 2 * CORRECTION_BUTTON_WIDTH + 30
 # Held longer than this and the correction runs on until the button is let go;
 # released sooner and it is a plain click worth CORRECTION_STEPS.
 CORRECTION_HOLD_DELAY_MS = 400
-# One width for every button in the bar, taken from the widest label (Update), so
-# the row reads as one block. 45 + 2*5 is the 55px bar.
+# One width for every button in the bar, so the row reads as one block.
+# 45 + 2*5 is the 55px bar.
 BAR_BUTTON_WIDTH = 90
 BAR_BUTTON_HEIGHT = 45
 BAR_PAD_Y = 5
@@ -74,6 +77,7 @@ SETTINGS_SLIDER_WIDTH = 300
 SETTINGS_VALUE_WIDTH = 60
 # the three buttons side by side, including the gaps between them
 SETTINGS_ROW_WIDTH = KIOSK_BUTTON_WIDTH + 2 * SETTINGS_BUTTON_WIDTH + 32
+VERSION_ROW_HEIGHT = 28  # one line of text, one standard button
 CLOSE_BUTTON_HEIGHT = 44  # a finger, not a mouse pointer
 HISTORY_ROW_PITCH = 26
 HISTORY_WIDTH = 420
@@ -82,10 +86,10 @@ COUNTDOWN_TICK_MS = 250
 COUNTDOWN_FONT_SIZE = 22  # the countdown is short lines, not one word
 POWER_ON_COLOR = "#c62828"  # red while mains is live: a warning, not a status
 POWER_OFF_COLOR = "#555555"
-UPDATE_BUTTON_COLOR = "#1f6aa5"  # blue: neither a warning nor a running motor
+UPDATE_BUTTON_TEXT = "Updates installieren"
+UPDATE_BUTTON_WIDTH = 160
 
 POLL_INTERVAL_MS = 100
-UPDATE_POLL_MS = 5000  # the checker runs in a thread; the bar reads its result here
 WEATHER_UI_REFRESH_MS = 5000
 CLOCK_TICK_MS = 1000  # the display shows seconds, so it has to tick once a second
 # Two lines inside the 55px bar: 30 + 20 leaves a little air above and below.
@@ -119,9 +123,8 @@ ICON_TABLE_COLUMNS = [  # (header, width, anchor)
 
 STEPS_MIN = 27000
 STEPS_MAX = 30000
-SPEED_MIN = 200
-SPEED_MAX = 1400
-INVERTER_DELAY_STEPS = int(INVERTER_STARTUP_MAX - INVERTER_STARTUP_MIN)  # whole seconds
+SPEED_MIN = 400
+SPEED_MAX = 1000
 ROPE_DELAY_STEPS = int(ROPE_DELAY_MAX - ROPE_DELAY_MIN)
 
 
@@ -151,12 +154,13 @@ class BedGui:
         self.weather = weather
         self.history = history
         self.inverter = inverter if inverter is not None else Inverter()
-        self.updater = updater if updater is not None else UpdateChecker()
+        self.updater = updater if updater is not None else Updater()
         # own default so existing callers keep working; it touches no network until started
         self.timesync = timesync if timesync is not None else TimeSync()
         self._move_context: MoveContext | None = None
         self._pending_move = None
         self._wait_timer = None
+        self._shown_warning = None
         self._updating = False
         self._wait_until = 0.0
         self._stop_button_text = "STOP"
@@ -168,8 +172,8 @@ class BedGui:
         self._open_windows: dict[str, object] = {}
         self._steps_value_label = None
         self._speed_value_label = None
-        self._delay_value_label = None
         self._rope_value_label = None
+        self._update_button = None
         self._forecast_labels = []
         self._rendered_forecast_key = None
         self._build()
@@ -199,11 +203,6 @@ class BedGui:
             bottom, text="230V", width=BAR_BUTTON_WIDTH, height=BAR_BUTTON_HEIGHT,
             font=bar_font, command=self._toggle_inverter, hover=False)
         self.power_button.pack(side="left", padx=4, pady=BAR_PAD_Y)
-        # built here, shown only once an update is actually waiting
-        self.update_button = ctk.CTkButton(
-            bottom, text="Update", width=BAR_BUTTON_WIDTH, height=BAR_BUTTON_HEIGHT,
-            font=bar_font, fg_color=UPDATE_BUTTON_COLOR, command=self._on_update,
-            hover=False)
         self._build_clock_panel(bottom)
 
         # left vertical bar: empty when the bed is up, fills from the top down as the
@@ -257,7 +256,6 @@ class BedGui:
         self._update_power_button()
         self._set_bar(self.controller.position_fraction)
         self._update_clock()
-        self._refresh_update_button()
         self._refresh_weather()
         self._apply_window_mode()
 
@@ -413,34 +411,33 @@ class BedGui:
         self._update_corrections_button()
         self._update_power_button()
 
-    def _refresh_update_button(self) -> None:
-        """The button only exists while there is something to install."""
-        if self.updater.update_available and not self._updating:
-            self.update_button.pack(side="left", padx=4, pady=BAR_PAD_Y)
-        elif not self._updating:
-            self.update_button.pack_forget()
-        self.app.after(UPDATE_POLL_MS, self._refresh_update_button)
-
     def _on_update(self) -> None:
         # pulling out from under a moving bed would leave the position unwritten
         if self.controller.is_moving or self._updating:
             return
         self._updating = True
-        self.update_button.configure(text="läuft…", state="disabled")
+        self._set_update_button("sucht…", "disabled")
         threading.Thread(target=self._run_update, daemon=True).start()
 
     def _run_update(self) -> None:
-        """The pull can take a moment on a phone connection, so it runs off the UI."""
-        succeeded = self.updater.apply()
-        self.app.after(0, lambda: self._update_finished(succeeded))
+        """Looking and pulling both talk to GitHub, so both run off the UI thread."""
+        outcome = self.updater.install()
+        self.app.after(0, lambda: self._update_finished(outcome))
 
-    def _update_finished(self, succeeded: bool) -> None:
+    def _update_finished(self, outcome: str) -> None:
         self._updating = False
-        if not succeeded:
-            self.update_button.configure(text="Update", state="normal")
-            messagebox.showerror("Update", "Update fehlgeschlagen. Details im Log.")
+        if outcome == update.UPDATED:
+            self._restart()
             return
-        self._restart()
+        self._set_update_button(UPDATE_BUTTON_TEXT, "normal")
+        if outcome == update.UP_TO_DATE:
+            messagebox.showinfo("Update", "Die Software ist aktuell.")
+        else:
+            messagebox.showerror("Update", "Update fehlgeschlagen. Details im Log.")
+
+    def _set_update_button(self, text: str, state: str) -> None:
+        if self._update_button is not None:  # the settings window may be closed by now
+            self._update_button.configure(text=text, state=state)
 
     def _restart(self) -> None:
         """Replace the process with a fresh one of the just pulled version.
@@ -489,8 +486,7 @@ class BedGui:
         if self._move_context == MoveContext.UP and self.controller.at_top:
             # the ropes go on while the motors still hold the bed, so the prompt comes
             # first and mains is cut once it is acknowledged
-            messagebox.showinfo("Bett sichern", "Sicherungsseile anbringen!")
-            self._switch_off_after_move()
+            self._secure_bed_window()
         elif self._move_context == MoveContext.DOWN and self.controller.at_bottom:
             self._switch_off_after_move()
         self._move_context = None
@@ -499,6 +495,27 @@ class BedGui:
         """Parked at an end stop, nothing draws mains any more."""
         if self.inverter.turn_off():
             self._update_power_button()
+
+    def _secure_bed_window(self) -> None:
+        """The ropes go on while the motors still hold the bed, so mains is only cut
+        once this is acknowledged."""
+        self._on_window_closed("secure")
+        self._toggle_window("secure", self._build_secure_window)
+
+    def _build_secure_window(self):
+        window = ctk.CTkToplevel(self.app)
+        window.title("Bett sichern")
+        content = ctk.CTkFrame(window, fg_color="transparent")
+        content.pack(padx=WINDOW_PAD, pady=WINDOW_PAD, fill="both", expand=True)
+        ctk.CTkLabel(content, text="Sicherungsseile anbringen!",
+                     font=ctk.CTkFont(size=20, weight="bold")).grid(row=0, column=0)
+        self._add_close_button(content, row=1, width=SECURE_WINDOW_WIDTH - 2 * WINDOW_PAD,
+                               name="secure", columnspan=1, text="OK")
+        # the window reports a default height until its children are laid out
+        content.update_idletasks()
+        window.geometry(f"{SECURE_WINDOW_WIDTH}x{content.winfo_reqheight() + 2 * WINDOW_PAD}")
+        self._place_beside_the_bar(window)
+        return window
 
     def _correct(self, action) -> None:
         if self.controller.is_moving:
@@ -562,19 +579,22 @@ class BedGui:
         window = self._open_windows.pop(name, None)
         if name == "settings":
             self._kiosk_button = None
-            self._delay_value_label = None
             self._rope_value_label = None
+            self._update_button = None
         if name == "corrections":
             # the buttons are about to be destroyed, so no release event is coming
             self._cancel_correction_timer()
             self._end_correction_hold()
-            self._release_corrections_power()
+            self._release_power_if_idle()
+        if name == "secure" and window is not None:
+            self._release_power_if_idle()
         if window is not None:
             window.destroy()
 
-    def _add_close_button(self, parent, row: int, width: int, name: str, columnspan: int):
+    def _add_close_button(self, parent, row: int, width: int, name: str, columnspan: int,
+                          text: str = "Schliessen"):
         """Closing by the window decoration is a small target on a touch panel."""
-        button = ctk.CTkButton(parent, text="Schliessen", width=width,
+        button = ctk.CTkButton(parent, text=text, width=width,
                                height=CLOSE_BUTTON_HEIGHT,
                                command=lambda: self._on_window_closed(name), hover=False)
         button.grid(row=row, column=0, columnspan=columnspan, padx=12, pady=(12, 0))
@@ -592,33 +612,28 @@ class BedGui:
     def _build_settings_window(self):
         window = ctk.CTkToplevel(self.app)
         window.title("Settings")
-        window.geometry("520x390")
         content = ctk.CTkFrame(window, fg_color="transparent")
         content.pack(expand=True)
         config = self.controller.config
         self._steps_value_label = self._add_slider_row(
-            content, 0, "total steps", STEPS_MIN, STEPS_MAX, config.total_steps,
+            content, 0, "Anzahl Schritte", STEPS_MIN, STEPS_MAX, config.total_steps,
             self._on_steps_change, str(config.total_steps))
         self._speed_value_label = self._add_slider_row(
-            content, 1, "speed pps", SPEED_MIN, SPEED_MAX, config.speed_pps,
+            content, 1, "Geschwindigkeit PPS", SPEED_MIN, SPEED_MAX, config.speed_pps,
             self._on_speed_change, str(int(config.speed_pps)))
-        self._delay_value_label = self._add_slider_row(
-            content, 2, "230V Anlauf", INVERTER_STARTUP_MIN, INVERTER_STARTUP_MAX,
-            config.inverter_startup_seconds, self._on_inverter_delay_change,
-            self._delay_text(config.inverter_startup_seconds), steps=INVERTER_DELAY_STEPS)
         self._rope_value_label = self._add_slider_row(
-            content, 3, "Seile lösen", ROPE_DELAY_MIN, ROPE_DELAY_MAX,
+            content, 2, "Seile lösen", ROPE_DELAY_MIN, ROPE_DELAY_MAX,
             config.rope_delay_seconds, self._on_rope_delay_change,
             self._delay_text(config.rope_delay_seconds), steps=ROPE_DELAY_STEPS)
-        ctk.CTkLabel(content, text="Ort").grid(row=4, column=0, padx=12, pady=12, sticky="e")
+        ctk.CTkLabel(content, text="Ort").grid(row=3, column=0, padx=12, pady=12, sticky="e")
         self._location_menu = ctk.CTkOptionMenu(
-            content, width=LOCATION_MENU_WIDTH, values=[place.label for place in LOCATIONS],
+            content, width=LOCATION_MENU_WIDTH, values=self._location_labels(),
             command=self._on_location_chosen, hover=False)
-        self._location_menu.set(location_or_default(self.weather.selected).label)
-        self._location_menu.grid(row=4, column=1, padx=12, pady=12, sticky="w")
+        self._location_menu.set(self._location_label(location_or_default(self.weather.selected)))
+        self._location_menu.grid(row=3, column=1, padx=12, pady=12, sticky="w")
 
         buttons = ctk.CTkFrame(content, fg_color="transparent")
-        buttons.grid(row=5, column=0, columnspan=3, padx=12, pady=(16, 0))
+        buttons.grid(row=4, column=0, columnspan=3, padx=12, pady=(16, 0))
         self._kiosk_button = ctk.CTkButton(buttons, text=self._kiosk_button_text(),
                                            width=KIOSK_BUTTON_WIDTH, command=self._toggle_kiosk, hover=False)
         self._kiosk_button.pack(side="left", padx=(0, 8))
@@ -626,10 +641,35 @@ class BedGui:
                       command=self._weather_icons_window, hover=False).pack(side="left", padx=8)
         ctk.CTkButton(buttons, text="Historie", width=SETTINGS_BUTTON_WIDTH,
                       command=self._history_window, hover=False).pack(side="left", padx=(8, 0))
+        self._build_version_row(content, row=5)
         self._add_close_button(content, row=6, width=SETTINGS_ROW_WIDTH,
                                name="settings", columnspan=3)
+        window.geometry(self._settings_geometry(content))
         self._place_beside_the_bar(window)
         return window
+
+    @staticmethod
+    def _settings_geometry(content) -> str:
+        """Measured, not fixed: the German row labels are wider than the English ones
+        were, and a fixed width cut the value column off."""
+        content.update_idletasks()
+        return (f"{content.winfo_reqwidth() + 2 * WINDOW_PAD}"
+                f"x{content.winfo_reqheight() + 2 * WINDOW_PAD}")
+
+    def _build_version_row(self, parent, row: int) -> None:
+        """What is running, next to the only way to change it. Same width as the button
+        row above it, so both edges line up."""
+        line = ctk.CTkFrame(parent, fg_color="transparent", width=SETTINGS_ROW_WIDTH,
+                            height=VERSION_ROW_HEIGHT)
+        line.grid(row=row, column=0, columnspan=3, padx=12, pady=(16, 0))
+        # the children are packed, so it is pack that would shrink the frame around them
+        line.pack_propagate(False)
+        ctk.CTkLabel(line, text=f"Version {self.updater.version()}",
+                     text_color="#888888").pack(side="left")
+        self._update_button = ctk.CTkButton(line, text=UPDATE_BUTTON_TEXT,
+                                            width=UPDATE_BUTTON_WIDTH,
+                                            command=self._on_update, hover=False)
+        self._update_button.pack(side="right")
 
     @staticmethod
     def _add_slider_row(parent, row, label, low, high, value, command, value_text, steps=None):
@@ -655,12 +695,6 @@ class BedGui:
         if label is not None:  # the settings window may be closed again by now
             label.configure(text=text)
 
-    def _on_inverter_delay_change(self, value) -> None:
-        seconds = float(round(value))
-        self.inverter.startup_seconds = seconds
-        self._store_setting("inverter_startup_seconds", seconds,
-                            self._delay_value_label, self._delay_text(seconds))
-
     def _on_rope_delay_change(self, value) -> None:
         seconds = float(round(value))
         self._store_setting("rope_delay_seconds", seconds,
@@ -677,13 +711,12 @@ class BedGui:
     def _corrections_window(self) -> None:
         self._toggle_window("corrections", self._build_corrections_window)
 
-    def _release_corrections_power(self) -> None:
-        """Mains came on with the window and goes off with it - unless a movement is
-        starting, which needs it and switches it off itself at the end stop."""
+    def _release_power_if_idle(self) -> None:
+        """Mains goes off with the window - unless a movement is running or starting,
+        which needs it and switches it off itself at the end stop."""
         if self.controller.is_moving or self._pending_move is not None:
             return
-        if self.inverter.turn_off():
-            self._update_power_button()
+        self._switch_off_after_move()
 
     def _build_corrections_window(self):
         # the corrections drive the motors, so mains comes on with the window; by the
@@ -715,9 +748,18 @@ class BedGui:
         self._place_beside_the_bar(window)
         return window
 
+    def _location_labels(self) -> list:
+        return [self._location_label(place) for place in LOCATIONS]
+
+    def _location_label(self, place) -> str:
+        """Marked when that region has a warning, so the dropdown says where to look."""
+        warned = place.key in self.weather.warned_locations()
+        return f"{WARNING_MARKER}{place.label}" if warned else place.label
+
     def _on_location_chosen(self, label: str) -> None:
+        wanted = label.removeprefix(WARNING_MARKER)
         for location in LOCATIONS:
-            if location.label == label:
+            if location.label == wanted:
                 self._select_location(location.key)
                 return
 
@@ -852,6 +894,64 @@ class BedGui:
         """Today as an ISO date, off the corrected clock rather than the machine one."""
         return self.timesync.now().date().isoformat()
 
+    def _warning_for(self, day: str):
+        """The warning in force at the selected location on that day, if any."""
+        return self.weather.warning_on(self.weather.selected, day)
+
+    def _warning_color(self, day: str):
+        warning = self._warning_for(day)
+        return warning.color if warning is not None else None
+
+    def _warning_window(self, day: str) -> None:
+        """Opened by tapping the marked icon; does nothing where there is no warning."""
+        warning = self._warning_for(day)
+        if warning is None:
+            return
+        self._on_window_closed("warning")  # a second tap swaps the day, not two windows
+        self._shown_warning = warning
+        self._toggle_window("warning", self._build_warning_window)
+
+    def _build_warning_window(self):
+        warning = self._shown_warning
+        window = ctk.CTkToplevel(self.app)
+        window.title("Wetterwarnung")
+        content = ctk.CTkFrame(window, fg_color="transparent")
+        content.pack(padx=WINDOW_PAD, pady=WINDOW_PAD, fill="both", expand=True)
+
+        headline = warning.headline or warning.event
+        ctk.CTkLabel(content, text=headline, font=ctk.CTkFont(size=18, weight="bold"),
+                     wraplength=WARNING_TEXT_WIDTH, justify="left", anchor="w").grid(
+            row=0, column=0, sticky="w")
+        ctk.CTkLabel(content, text=self._warning_subtitle(warning), text_color="#888888",
+                     wraplength=WARNING_TEXT_WIDTH, justify="left", anchor="w").grid(
+            row=1, column=0, sticky="w", pady=(2, 10))
+        row = 2
+        for body in (warning.description, warning.instruction):
+            if not body:
+                continue
+            ctk.CTkLabel(content, text=body, wraplength=WARNING_TEXT_WIDTH,
+                         justify="left", anchor="w").grid(row=row, column=0, sticky="w",
+                                                          pady=(0, 8))
+            row += 1
+        if warning.sender:
+            ctk.CTkLabel(content, text=f"Quelle: {warning.sender} über MeteoAlarm",
+                         text_color="#888888", anchor="w").grid(row=row, column=0,
+                                                                sticky="w", pady=(4, 0))
+            row += 1
+        self._add_close_button(content, row=row, width=WARNING_TEXT_WIDTH,
+                               name="warning", columnspan=1)
+        content.update_idletasks()
+        window.geometry(f"{WARNING_WINDOW_WIDTH}x{content.winfo_reqheight() + 2 * WINDOW_PAD}")
+        self._place_beside_the_bar(window)
+        return window
+
+    @staticmethod
+    def _warning_subtitle(warning) -> str:
+        """Area and the span it is in force, in a form a glance can take in."""
+        span = " – ".join(part for part in (_warning_stamp(warning.onset),
+                                            _warning_stamp(warning.expires)) if part)
+        return f"{warning.area} · {span}" if span else warning.area
+
     def _show_reading_missing(self) -> None:
         """A location that has not been fetched yet must not keep showing the previous
         one's numbers."""
@@ -965,7 +1065,7 @@ class BedGui:
         """Conditions right now - a point in time, not the day as a whole."""
         self.weather_city.configure(text=weather.city)
         self.weather_day.configure(text=weather.weekday)
-        self.weather_icon.show(weather.icon)
+        self.weather_icon.show(weather.icon, self._warning_color(self._today()))
         self.weather_temp.configure(text=f"{round(weather.temperature)}°C")
         self.weather_desc.configure(text=weather.description)
 
@@ -977,7 +1077,8 @@ class BedGui:
         self.forecast_frame.pack(expand=True, pady=(18, 0))
 
     def _render_forecast(self, daily) -> None:
-        key = [(day.date, day.icon, day.temp_max, day.temp_min, day.rain) for day in daily]
+        key = [(day.date, day.icon, day.temp_max, day.temp_min, day.rain,
+                self._warning_color(day.date)) for day in daily]
         if key == self._rendered_forecast_key:
             return
         self._rendered_forecast_key = key
@@ -993,8 +1094,9 @@ class BedGui:
             ]
             # the icon is drawn, not text, so it gets its own row between name and temps
             icon = icons.IconCanvas(self.forecast_frame, size=FORECAST_ICON_SIZE, background=_panel_background())
-            icon.show(day.icon)
+            icon.show(day.icon, self._warning_color(day.date))
             icon.grid(row=1, column=index, padx=8, pady=2)
+            icon.bind("<Button-1>", lambda _event, when=day.date: self._warning_window(when))
             self._forecast_labels.append(icon)
             for row, (text, font, color) in enumerate(rows):
                 label = ctk.CTkLabel(self.forecast_frame, text=text, anchor="center", font=font, text_color=color)
@@ -1016,3 +1118,12 @@ class BedGui:
 
     def display(self) -> None:
         self.app.mainloop()
+
+
+def _warning_stamp(stamp: str) -> str:
+    """A CAP timestamp as 30.09. 22:00, or empty when it cannot be read."""
+    try:
+        moment = datetime.fromisoformat(stamp)
+    except ValueError:
+        return ""
+    return f"{moment.day:02d}.{moment.month:02d}. {moment.hour:02d}:{moment.minute:02d}"

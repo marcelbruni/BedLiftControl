@@ -218,3 +218,86 @@ class TestIceClearance:
         plain = [oval[0][0] for oval in render("drizzle-2").ovals_colored(RAIN_COLOR)]
         shifted = [oval[0][0] for oval in render("drizzle-ice-2").ovals_colored(RAIN_COLOR)]
         assert all(new < old for new, old in zip(shifted, plain))
+
+
+class TestWarningMark:
+    """Drawn onto the weather icon, because a marker of its own would shift the row."""
+
+    @staticmethod
+    def canvas():
+        from unittest.mock import MagicMock
+
+        return MagicMock()
+
+    def test_it_draws_a_triangle_and_a_mark(self):
+        from bedliftcontrol import icons
+
+        canvas = self.canvas()
+        icons.draw_warning(canvas, 64, "#ef6c00")
+        assert canvas.create_polygon.called
+        assert canvas.create_line.called
+        assert canvas.create_oval.called
+
+    def test_it_uses_the_severity_colour(self):
+        from bedliftcontrol import icons
+
+        canvas = self.canvas()
+        icons.draw_warning(canvas, 64, "#c62828")
+        assert canvas.create_polygon.call_args.kwargs["fill"] == "#c62828"
+
+    def test_it_stays_in_the_corner(self):
+        """The icon underneath has to remain recognisable."""
+        from bedliftcontrol import icons
+
+        canvas = self.canvas()
+        icons.draw_warning(canvas, 100, "#ef6c00")
+        corners = canvas.create_polygon.call_args.args
+        assert min(corners) >= 0 and max(corners) <= 100
+        assert min(corners[1::2]) < 50, "sits in the upper half"
+        assert min(corners[0::2]) >= 50, "sits in the right half"
+
+
+class TestIconCanvasWarning:
+    @staticmethod
+    def canvas(monkeypatch, drawn):
+        from unittest.mock import MagicMock
+
+        from bedliftcontrol import icons
+
+        monkeypatch.setattr(icons, "draw_icon", lambda c, key, size: drawn.append(("icon", key)))
+        monkeypatch.setattr(icons, "draw_warning",
+                            lambda c, size, color: drawn.append(("warning", color)))
+        instance = icons.IconCanvas.__new__(icons.IconCanvas)
+        instance._size = 64
+        instance._key = None
+        instance._warning_color = None
+        return instance
+
+    def test_a_warning_is_drawn_on_top(self, monkeypatch):
+        drawn = []
+        canvas = self.canvas(monkeypatch, drawn)
+        canvas.show("sun", "#ef6c00")
+        assert drawn == [("icon", "sun"), ("warning", "#ef6c00")]
+
+    def test_the_same_state_is_not_redrawn(self, monkeypatch):
+        drawn = []
+        canvas = self.canvas(monkeypatch, drawn)
+        canvas.show("sun", "#ef6c00")
+        canvas.show("sun", "#ef6c00")
+        assert len(drawn) == 2
+
+    def test_a_new_warning_redraws_the_same_icon(self, monkeypatch):
+        """Without this the marker would only appear when the weather changed too."""
+        drawn = []
+        canvas = self.canvas(monkeypatch, drawn)
+        canvas.show("sun", None)
+        canvas.show("sun", "#ef6c00")
+        assert drawn[-1] == ("warning", "#ef6c00")
+
+    def test_a_cleared_warning_redraws_without_it(self, monkeypatch):
+        drawn = []
+        canvas = self.canvas(monkeypatch, drawn)
+        canvas.show("sun", "#ef6c00")
+        drawn.clear()
+        canvas.show("sun", None)
+        assert drawn == [("icon", "sun")]

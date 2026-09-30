@@ -31,7 +31,7 @@ class TestConfig:
     def test_load_missing_returns_defaults(self, tmp_path):
         config = Config.load(str(tmp_path / "does_not_exist.json"))
         assert config.total_steps == 28000
-        assert config.speed_pps == 800.0
+        assert config.speed_pps == 700.0
         assert config.bed_up is True
 
     def test_save_then_load_roundtrip(self, tmp_path):
@@ -59,7 +59,7 @@ class TestConfig:
         path.write_text('{"total_steps": 0, "speed_pps": -5, "bed_up": true}')
         config = Config.load(str(path))
         assert config.total_steps == 28000
-        assert config.speed_pps == 800.0
+        assert config.speed_pps == 700.0
         assert config.bed_up is True
 
     def test_save_is_atomic_and_leaves_no_temp_file(self, tmp_path):
@@ -541,36 +541,24 @@ class TestHistoryHook:
         BedController(config).move_up()  # must not raise
 
 
-class TestConfigInverter:
-    def test_the_delay_defaults_to_ten_seconds(self, tmp_path):
-        assert Config.load(str(tmp_path / "missing.json")).inverter_startup_seconds == 10.0
-
-    def test_the_delay_survives_a_save_and_load(self, tmp_path):
-        path = str(tmp_path / "config.json")
-        Config(inverter_startup_seconds=4.0, path=path).save()
-        assert Config.load(path).inverter_startup_seconds == 4.0
-
-    def test_zero_is_allowed(self, tmp_path):
-        path = str(tmp_path / "config.json")
-        Config(inverter_startup_seconds=0.0, path=path).save()
-        assert Config.load(path).inverter_startup_seconds == 0.0
-
-    def test_a_delay_above_the_maximum_is_clamped(self, tmp_path):
-        assert Config(inverter_startup_seconds=99.0,
-                      path=str(tmp_path / "c.json")).inverter_startup_seconds == 15.0
-
-    def test_a_negative_delay_is_clamped(self, tmp_path):
-        assert Config(inverter_startup_seconds=-5.0,
-                      path=str(tmp_path / "c.json")).inverter_startup_seconds == 0.0
-
-    def test_a_config_written_before_the_inverter_existed_keeps_its_values(self, tmp_path):
+class TestConfigWithoutTheInverterDelay:
+    def test_an_older_config_is_read_without_it(self, tmp_path):
+        """The delay used to be a setting; a config still carrying it must still load."""
         import json
 
         path = tmp_path / "config.json"
-        path.write_text(json.dumps({"total_steps": 29500, "speed_pps": 1200.0, "bed_up": False}))
+        path.write_text(json.dumps({"total_steps": 29500, "speed_pps": 900.0,
+                                    "bed_up": False, "inverter_startup_seconds": 12.0}))
         config = Config.load(str(path))
         assert config.total_steps == 29500
-        assert config.inverter_startup_seconds == 10.0
+        assert not hasattr(config, "inverter_startup_seconds")
+
+    def test_it_is_not_written_any_more(self, tmp_path):
+        import json
+
+        path = tmp_path / "config.json"
+        Config(path=str(path)).save()
+        assert "inverter_startup_seconds" not in json.loads(path.read_text())
 
 
 class TestConfigRopeDelay:
