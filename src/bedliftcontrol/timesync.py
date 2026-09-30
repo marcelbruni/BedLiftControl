@@ -31,12 +31,16 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
-from bedliftcontrol import clock
+from bedliftcontrol import clock, connectivity
 
 logger = logging.getLogger(__name__)
 
 TIME_URL = "https://api.open-meteo.com/v1/forecast?latitude=0&longitude=0"
 SYNC_INTERVAL_SECONDS = 3600  # hourly, as the machine clock drifts slowly
+# The Pi has no battery-backed clock, so a boot without a network shows whatever the
+# last shutdown left behind. Waiting out the full hour after the line comes up is an
+# hour of a visibly wrong clock, so the same cheap probe the weather uses runs here.
+PROBE_INTERVAL_SECONDS = 15
 HTTP_TIMEOUT = 8
 # The Date header is truncated to the second, so the real instant is uniformly spread
 # over the following second. Adding half of it centres the estimate.
@@ -106,9 +110,11 @@ class TimeSync:
         url: str = TIME_URL,
         interval: int = SYNC_INTERVAL_SECONDS,
         adjust_system_clock: bool = True,
+        probe_interval: int = PROBE_INTERVAL_SECONDS,
     ):
         self.url = url
         self.interval = interval
+        self.probe_interval = probe_interval
         self.adjust_system_clock = adjust_system_clock
         self.offset = timedelta(0)
         self.last_sync: datetime | None = None
@@ -155,8 +161,18 @@ class TimeSync:
 
     def _loop(self) -> None:
         while not self._stop.is_set():
-            self.refresh_once()
-            self._stop.wait(self.interval)
+            if self.refresh_once():
+                self._stop.wait(self.interval)
+            elif not self._wait_for_connection():
+                return
+
+    def _wait_for_connection(self) -> bool:
+        """Hold until the machine can reach the internet. False when the service stops."""
+        while not self._stop.wait(self.probe_interval):
+            if connectivity.is_online():
+                logger.info("Connection is back, syncing the clock")
+                return True
+        return False
 
     def stop(self) -> None:
         self._stop.set()

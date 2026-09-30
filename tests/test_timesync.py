@@ -229,3 +229,74 @@ class TestFormatOffset:
     def test_a_small_negative_offset_is_not_rendered_as_a_day(self):
         """str(timedelta(milliseconds=-110)) is '-1 day, 23:59:59.890000'."""
         assert "day" not in format_offset(timedelta(milliseconds=-110))
+
+
+class TestTheSyncLoop:
+    """The Pi has no battery clock: after a boot without a network the shown time is
+    whatever the last shutdown left. It must not stay that way for an hour."""
+
+    @staticmethod
+    def sync(monkeypatch, succeeds):
+        service = timesync_module.TimeSync(interval=3600, probe_interval=15,
+                                           adjust_system_clock=False)
+        monkeypatch.setattr(service, "refresh_once", lambda: succeeds)
+        return service
+
+    @staticmethod
+    def record_waits(service, monkeypatch, stop_after=1):
+        waits = []
+
+        def wait(seconds):
+            waits.append(seconds)
+            if len(waits) >= stop_after:
+                service._stop.set()
+                return True
+            return False
+
+        monkeypatch.setattr(service._stop, "wait", wait)
+        return waits
+
+    def test_a_successful_sync_waits_the_full_hour(self, monkeypatch):
+        service = self.sync(monkeypatch, succeeds=True)
+        waits = self.record_waits(service, monkeypatch)
+        service._loop()
+        assert waits == [3600]
+
+    def test_a_failed_sync_no_longer_waits_an_hour(self, monkeypatch):
+        """This was the bug: the result was thrown away and the loop slept regardless."""
+        service = self.sync(monkeypatch, succeeds=False)
+        monkeypatch.setattr(timesync_module.connectivity, "is_online", lambda: False)
+        waits = self.record_waits(service, monkeypatch, stop_after=3)
+        service._loop()
+        assert waits == [15, 15, 15]
+
+    def test_it_syncs_as_soon_as_the_line_is_up(self, monkeypatch):
+        answers = [False, True]
+        results = [False, True]
+        service = timesync_module.TimeSync(interval=3600, probe_interval=15,
+                                           adjust_system_clock=False)
+        monkeypatch.setattr(service, "refresh_once",
+                            lambda: results.pop(0) if results else True)
+        monkeypatch.setattr(timesync_module.connectivity, "is_online",
+                            lambda: answers.pop(0) if answers else True)
+        waits = self.record_waits(service, monkeypatch, stop_after=3)
+        service._loop()
+        assert waits == [15, 15, 3600], "two probes, then the hourly interval"
+        assert not results, "the second sync ran"
+
+    def test_it_asks_nothing_of_the_network_while_offline(self, monkeypatch):
+        attempts = []
+        service = timesync_module.TimeSync(interval=3600, probe_interval=15,
+                                           adjust_system_clock=False)
+        monkeypatch.setattr(service, "refresh_once",
+                            lambda: attempts.append(1) or False)
+        monkeypatch.setattr(timesync_module.connectivity, "is_online", lambda: False)
+        self.record_waits(service, monkeypatch, stop_after=5)
+        service._loop()
+        assert len(attempts) == 1
+
+    def test_stopping_ends_the_wait(self, monkeypatch):
+        service = self.sync(monkeypatch, succeeds=False)
+        monkeypatch.setattr(timesync_module.connectivity, "is_online", lambda: False)
+        service._stop.set()
+        service._loop()  # must return at once

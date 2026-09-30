@@ -174,8 +174,8 @@ before the motors turn — the inverter's output is not stable the instant the c
 closes. The wait is shown as a countdown on the STOP button, and STOP during the
 countdown drops the movement while leaving the inverter running.
 
-The correction window does the same in miniature: mains comes on when it opens and off
-when it closes, because those buttons drive the motors too.
+The correction panel does the same in miniature: mains comes on when it opens and off
+when it is left, because those buttons drive the motors too.
 
 A movement that reaches an end stop switches it off again: at the bottom silently, at the
 top after the "Sicherungsseile anbringen!" prompt is acknowledged — the motors hold the
@@ -256,12 +256,33 @@ The feeds shape what is possible here:
   Drome, FR715 Loire in the official order). Area names are matched as well, because the
   Swiss feed was empty while this was built and its identifiers could not be verified -
   an unmatched area is logged, which is how the missing ones will surface.
-- The text is fetched while the connection is there, not when the window is opened, so a
+- The text is fetched while the connection is there, not when the warning is opened, so a
   warning read in the morning still opens in the evening. At most twelve detail requests
   per refresh, one per document however many places share it.
 
 The MeteoAlarm EDR API would answer by coordinate and would solve the phone position, but
 its data queries need a membership (HTTP 401); only the feeds are open.
+
+## Views
+
+Everything the bar opens takes over the centre area instead of opening a window: the
+weather makes way for the settings or the corrections, and a back button appears in the
+top right corner. From the settings, "Historie" and "Wetter-Icons" go one level deeper
+and their back button returns to the settings. Pressing ⚙ or ↑↓ again while that panel
+is up goes straight back to the weather.
+
+The weather is only unpacked, never destroyed, so the five-second refresh keeps writing
+into it behind the panel and it returns exactly as it was. The panels are the other way
+round: built when entered, destroyed when left, so the history and the version line are
+never stale. Both deep panels scroll, because neither fits the 800x480 panel.
+
+The settings and the corrections are deliberately no wider than the weather they replace.
+Wider, and the centre area would grow and squeeze the arrow buttons every time a panel
+opened.
+
+Two things are still windows, because they are answers to an event rather than places
+to go: the "Sicherungsseile anbringen!" prompt at the top end stop, and the weather
+warning opened from a marked icon.
 
 ## Tracking
 

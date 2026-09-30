@@ -267,34 +267,52 @@ class TestCorrect:
         controller.run_async.assert_not_called()
 
 
-class TestWindowToggle:
-    def test_second_click_closes_the_window(self, gui):
-        gui._settings_window()
-        window = gui._open_windows["settings"]
-        gui._settings_window()
-        assert "settings" not in gui._open_windows
-        window.destroy.assert_called_once()
+class TestViewToggle:
+    """The panels live in the centre area now; the bar button leads in and out again."""
 
-    def test_closing_via_protocol_clears_the_reference(self, gui):
-        gui._corrections_window()
-        gui._on_window_closed("corrections")
-        assert "corrections" not in gui._open_windows
+    def test_the_settings_button_opens_the_settings(self, gui):
+        gui._on_settings_button()
+        assert gui._view == gui_module.VIEW_SETTINGS
 
-    def test_each_button_tracks_its_own_window(self, gui):
-        gui._settings_window()
-        gui._corrections_window()
-        assert set(gui._open_windows) == {"settings", "corrections"}
+    def test_pressing_it_again_goes_back_to_the_weather(self, gui):
+        gui._on_settings_button()
+        gui._on_settings_button()
+        assert gui._view == gui_module.VIEW_WEATHER
+
+    def test_the_corrections_button_works_the_same_way(self, gui):
+        gui._on_corrections_button()
+        assert gui._view == gui_module.VIEW_CORRECTIONS
+        gui._on_corrections_button()
+        assert gui._view == gui_module.VIEW_WEATHER
+
+    def test_one_panel_replaces_the_other(self, gui):
+        """Two panels at once is what the separate windows allowed and this must not."""
+        gui._on_settings_button()
+        gui._on_corrections_button()
+        assert gui._view == gui_module.VIEW_CORRECTIONS
+
+    def test_the_settings_button_leads_out_of_a_sub_panel(self, gui):
+        gui._on_settings_button()
+        gui._show_history()
+        gui._on_settings_button()
+        assert gui._view == gui_module.VIEW_SETTINGS
+
+    def test_entering_the_same_view_twice_rebuilds_nothing(self, gui):
+        gui._show_view(gui_module.VIEW_SETTINGS)
+        first = gui._kiosk_button
+        gui._show_view(gui_module.VIEW_SETTINGS)
+        assert gui._kiosk_button is first
 
 
 class TestSettingsValues:
     def test_steps_change_updates_value_label(self, gui, controller):
-        gui._settings_window()
+        gui._show_view(gui_module.VIEW_SETTINGS)
         gui._on_steps_change(29000)
         assert controller.config.total_steps == 29000
         gui._steps_value_label.configure.assert_any_call(text="29000")
 
     def test_speed_change_updates_value_label(self, gui, controller):
-        gui._settings_window()
+        gui._show_view(gui_module.VIEW_SETTINGS)
         gui._on_speed_change(1000)
         assert controller.config.speed_pps == 1000.0
         gui._speed_value_label.configure.assert_any_call(text="1000")
@@ -515,28 +533,35 @@ class TestKioskMode:
         assert gui._kiosk_button_text() == "Kiosk-Modus ausschalten"
 
     def test_settings_window_offers_the_toggle(self, gui):
-        gui._settings_window()
+        gui._show_view(gui_module.VIEW_SETTINGS)
         assert gui._kiosk_button is not None
 
-    def test_closing_settings_drops_the_button_reference(self, gui):
+    def test_leaving_the_settings_drops_the_button_reference(self, gui):
         """_refresh_kiosk_button must not configure a destroyed widget."""
-        gui._settings_window()
-        gui._on_window_closed("settings")
+        gui._show_view(gui_module.VIEW_SETTINGS)
+        gui._go_back()
         assert gui._kiosk_button is None
         gui._toggle_kiosk()  # must not raise
 
-    def test_child_windows_are_raised_over_a_fullscreen_parent(self, gui, controller):
-        """In kiosk mode the settings window is the only way back out."""
+    def test_the_way_out_of_kiosk_mode_needs_no_window(self, gui, controller):
+        """The settings used to be a Toplevel that had to be forced over the fullscreen
+        parent. In the centre area there is nothing left to raise."""
         controller.config.kiosk = True
-        gui._settings_window()
-        window = gui._open_windows["settings"]
+        gui._show_view(gui_module.VIEW_SETTINGS)
+        assert gui._view == gui_module.VIEW_SETTINGS
+        assert not gui._open_windows
+
+    def test_the_remaining_windows_are_still_raised_in_kiosk_mode(self, gui, controller):
+        controller.config.kiosk = True
+        gui._secure_bed_window()
+        window = gui._open_windows["secure"]
         window.lift.assert_called()
         window.attributes.assert_any_call("-topmost", True)
 
-    def test_child_windows_are_not_forced_on_top_when_windowed(self, gui, controller):
+    def test_they_are_not_forced_on_top_when_windowed(self, gui, controller):
         controller.config.kiosk = False
-        gui._settings_window()
-        window = gui._open_windows["settings"]
+        gui._secure_bed_window()
+        window = gui._open_windows["secure"]
         assert not any(call.args[:1] == ("-topmost",) for call in window.attributes.call_args_list)
 
 
@@ -602,43 +627,43 @@ class TestStopButton:
         assert "secure" in gui._open_windows
 
 
-class TestIconTableWindow:
-    """The 28 row table is taller than the Pi's 480px panel, so it scrolls."""
-
-    def test_fits_the_pi_panel(self, gui):
-        from bedliftcontrol.gui import WINDOW_PAD
-
-        visible = gui._icon_table_visible_height(480, 28)
-        window_height = visible + 2 * WINDOW_PAD
-        assert window_height + 30 <= 480, "must leave room for the title bar too"
-
-    def test_shows_everything_when_the_screen_is_big_enough(self, gui):
-        from bedliftcontrol.gui import ICON_TABLE_ROW_PITCH
-
-        assert gui._icon_table_visible_height(1050, 28) == 29 * ICON_TABLE_ROW_PITCH
-
-    def test_caps_at_the_screen_on_a_small_panel(self, gui):
-        from bedliftcontrol.gui import ICON_TABLE_ROW_PITCH
-
-        assert gui._icon_table_visible_height(480, 28) < 29 * ICON_TABLE_ROW_PITCH
-
-    def test_never_collapses_below_one_row(self, gui):
-        from bedliftcontrol.gui import ICON_TABLE_ROW_PITCH
-
-        assert gui._icon_table_visible_height(100, 28) == ICON_TABLE_ROW_PITCH
-
-    def test_more_rows_never_make_a_taller_window_than_the_screen_allows(self, gui):
-        from bedliftcontrol.gui import WINDOW_PAD
-
-        for rows in (1, 28, 200):
-            assert gui._icon_table_visible_height(480, rows) + 2 * WINDOW_PAD + 30 <= 480
+class TestIconTable:
+    """The 28 row table is far taller than the centre area, so it scrolls."""
 
     def test_uses_a_scrollable_frame(self, gui):
         import customtkinter
 
         customtkinter.CTkScrollableFrame.reset_mock()
-        gui._weather_icons_window()
+        gui._show_weather_icons()
         assert customtkinter.CTkScrollableFrame.called
+
+    def test_it_takes_the_space_it_is_given(self, gui):
+        """No fixed height any more: the frame fills the centre area, whatever that is
+        on the Pi, and scrolls the rest."""
+        import customtkinter
+
+        customtkinter.CTkScrollableFrame.reset_mock()
+        gui._show_weather_icons()
+        kwargs = customtkinter.CTkScrollableFrame.call_args.kwargs
+        assert "height" not in kwargs and "width" not in kwargs
+
+    def test_it_lists_every_code(self, gui):
+        import customtkinter
+
+        from bedliftcontrol.weather import WEATHER_CODES
+
+        customtkinter.CTkLabel.reset_mock()
+        gui._show_weather_icons()
+        texts = [c.kwargs.get("text") for c in customtkinter.CTkLabel.call_args_list]
+        assert all(str(code) in texts for code in WEATHER_CODES)
+
+    def test_the_settings_offer_it(self, gui):
+        import customtkinter
+
+        customtkinter.CTkButton.reset_mock()
+        gui._show_view(gui_module.VIEW_SETTINGS)
+        texts = [c.kwargs.get("text") for c in customtkinter.CTkButton.call_args_list]
+        assert "Wetter-Icons" in texts
 
 
 class TestDescentPercent:
@@ -839,15 +864,14 @@ class TestCorrectionsButtonGating:
         gui._poll_movement()
         assert _states(gui.corrections_button)[-1] == "disabled"
 
-    def test_an_open_correction_window_is_closed_when_a_move_starts(self, gui, controller):
-        gui._corrections_window()
-        assert "corrections" in gui._open_windows
+    def test_the_correction_panel_is_left_when_a_move_starts(self, gui, controller):
+        gui._show_view(gui_module.VIEW_CORRECTIONS)
         gui._on_up()
-        assert "corrections" not in gui._open_windows
+        assert gui._view == gui_module.VIEW_WEATHER
 
-    def test_closing_it_is_harmless_when_it_was_never_open(self, gui):
+    def test_a_move_from_the_weather_stays_there(self, gui):
         gui._on_up()  # must not raise
-        assert "corrections" not in gui._open_windows
+        assert gui._view == gui_module.VIEW_WEATHER
 
 
 class TestCorrectionClickVersusHold:
@@ -896,19 +920,19 @@ class TestCorrectionClickVersusHold:
         assert not controller.run_async.called, "a hold must not end in an extra click"
         assert gui._correction_holding is False
 
-    def test_closing_the_window_ends_a_running_hold(self, gui, controller):
+    def test_leaving_the_panel_ends_a_running_hold(self, gui, controller):
         """No release event is coming once the buttons are destroyed."""
-        gui._corrections_window()
+        gui._show_view(gui_module.VIEW_CORRECTIONS)
         gui._correction_pressed(controller.hold_front_up)
         gui.app.after.call_args.args[1]()
-        gui._on_window_closed("corrections")
+        gui._go_back()
         controller.stop.assert_called_once()
         assert gui._correction_holding is False
 
-    def test_closing_the_window_cancels_a_pending_threshold(self, gui, controller):
-        gui._corrections_window()
+    def test_leaving_the_panel_cancels_a_pending_threshold(self, gui, controller):
+        gui._show_view(gui_module.VIEW_CORRECTIONS)
         gui._correction_pressed(controller.hold_front_up)
-        gui._on_window_closed("corrections")
+        gui._go_back()
         assert gui._correction_timer is None
         assert not controller.run_async.called
 
@@ -940,13 +964,13 @@ class TestLocationSelection:
         from bedliftcontrol.weather import LOCATIONS
 
         customtkinter.CTkOptionMenu.reset_mock()
-        gui._settings_window()
+        gui._show_view(gui_module.VIEW_SETTINGS)
         values = customtkinter.CTkOptionMenu.call_args.kwargs["values"]
         assert values == [place.label for place in LOCATIONS]
 
     def test_the_dropdown_starts_on_the_selected_one(self, gui, weather):
         weather.selected = "lacure"
-        gui._settings_window()
+        gui._show_view(gui_module.VIEW_SETTINGS)
         gui._location_menu.set.assert_called_once_with("La Cure")
 
     def test_choosing_a_label_selects_its_location(self, gui, weather):
@@ -1014,7 +1038,7 @@ class TestMissingReading:
         assert shown == ["unknown"]
 
 
-class TestHistoryWindow:
+class TestHistoryPanel:
     @pytest.fixture
     def gui_with_history(self, controller, weather):
         from bedliftcontrol.history import LocationVisit
@@ -1031,22 +1055,20 @@ class TestHistoryWindow:
         import customtkinter
 
         customtkinter.CTkButton.reset_mock()
-        gui._settings_window()
+        gui._show_view(gui_module.VIEW_SETTINGS)
         texts = [c.kwargs.get("text") for c in customtkinter.CTkButton.call_args_list]
         assert "Historie" in texts
 
-    def test_opens_and_closes(self, gui):
-        gui._history_window()
-        assert "history" in gui._open_windows
-        gui._history_window()
-        assert "history" not in gui._open_windows
+    def test_it_opens_in_the_centre_area(self, gui):
+        gui._show_history()
+        assert gui._view == gui_module.VIEW_HISTORY
 
     def test_shows_the_night_count(self, gui_with_history):
         import customtkinter
 
         built, _ = gui_with_history
         customtkinter.CTkLabel.reset_mock()
-        built._history_window()
+        built._show_history()
         texts = [c.kwargs.get("text") for c in customtkinter.CTkLabel.call_args_list]
         assert "\u00dcbernachtungen: 7" in texts
 
@@ -1055,7 +1077,7 @@ class TestHistoryWindow:
 
         built, _ = gui_with_history
         customtkinter.CTkLabel.reset_mock()
-        built._history_window()
+        built._show_history()
         texts = [c.kwargs.get("text") or "" for c in customtkinter.CTkLabel.call_args_list]
         entries = [text for text in texts if "(" in text and ")" in text]
         assert entries[0].startswith("14.09.2026 17:04")
@@ -1070,14 +1092,14 @@ class TestHistoryWindow:
         tracker.locations = []
         gui.history = tracker
         customtkinter.CTkLabel.reset_mock()
-        gui._history_window()
+        gui._show_history()
         texts = [c.kwargs.get("text") for c in customtkinter.CTkLabel.call_args_list]
         assert "Noch keine Standorte aufgezeichnet" in texts
 
     def test_works_without_a_tracker(self, gui):
         gui.history = None
-        gui._history_window()  # must not raise
-        assert "history" in gui._open_windows
+        gui._show_history()  # must not raise
+        assert gui._view == gui_module.VIEW_HISTORY
 
     def test_the_timestamp_is_formatted(self, gui):
         from bedliftcontrol.history import LocationVisit
@@ -1091,11 +1113,14 @@ class TestHistoryWindow:
         visit = LocationVisit("kaputt", "Thun", 46.7210, 7.5644)
         assert gui._format_visit(visit).startswith("kaputt")
 
-    def test_the_window_fits_the_pi_panel(self, gui):
-        from bedliftcontrol.gui import WINDOW_PAD
+    def test_the_list_scrolls(self, gui):
+        """500 stops do not fit any panel, so the list takes what it gets and scrolls."""
+        import customtkinter
 
-        visible = gui._history_visible_height(480, 500)
-        assert visible + 2 * WINDOW_PAD + gui_module.HISTORY_HEADER_HEIGHT + 30 <= 480
+        customtkinter.CTkScrollableFrame.reset_mock()
+        gui._show_history()
+        assert customtkinter.CTkScrollableFrame.called
+        assert "height" not in customtkinter.CTkScrollableFrame.call_args.kwargs
 
 
 class FakeInverter:
@@ -1298,7 +1323,7 @@ class TestInverterSettings:
         customtkinter.CTkSlider.reset_mock()
         customtkinter.CTkLabel.reset_mock()
         customtkinter.CTkButton.reset_mock()
-        built._settings_window()
+        built._show_view(gui_module.VIEW_SETTINGS)
         return built, inverter
 
     @staticmethod
@@ -1337,7 +1362,7 @@ class TestSettingsLabels:
         customtkinter.CTkLabel.reset_mock()
         customtkinter.CTkButton.reset_mock()
         customtkinter.CTkSlider.reset_mock()
-        built._settings_window()
+        built._show_view(gui_module.VIEW_SETTINGS)
         return built
 
     @staticmethod
@@ -1370,7 +1395,7 @@ class TestVersionRow:
 
         built = BedGui(controller, weather, updater=FakeUpdater())
         customtkinter.CTkFrame.reset_mock()
-        built._settings_window()
+        built._show_view(gui_module.VIEW_SETTINGS)
         return built
 
     @staticmethod
@@ -1399,7 +1424,7 @@ class TestVersionRow:
 
         customtkinter.CTkFrame.side_effect = record
         built = BedGui(controller, weather, updater=FakeUpdater())
-        built._settings_window()
+        built._show_view(gui_module.VIEW_SETTINGS)
         rows = [widget for kwargs, widget in made
                 if kwargs.get("width") == gui_module.SETTINGS_ROW_WIDTH]
         assert len(rows) == 1
@@ -1410,25 +1435,16 @@ class TestVersionRow:
         """pack_propagate(False) freezes both, so the height has to be given."""
         assert self.version_frame()["height"] == gui_module.VERSION_ROW_HEIGHT
 
-    def test_the_close_button_spans_the_same_width(self, opened):
-        import customtkinter
-
-        widths = [c.kwargs.get("width") for c in customtkinter.CTkButton.call_args_list
-                  if c.kwargs.get("text") == "Schliessen"]
-        assert gui_module.SETTINGS_ROW_WIDTH in widths
-
-    def test_the_window_is_measured_not_fixed(self, opened):
-        """The German labels are wider than the English ones were; a hard-coded width
-        cut the value column off."""
-        window = opened._open_windows["settings"]
-        first = str(window.geometry.call_args_list[0].args[0])
-        assert "520x" not in first
+    def test_the_button_row_above_has_the_same_width(self, opened):
+        """Both rows are built from the same constant, so they cannot drift apart."""
+        assert (gui_module.KIOSK_BUTTON_WIDTH + 2 * gui_module.SETTINGS_BUTTON_WIDTH + 32
+                == gui_module.SETTINGS_ROW_WIDTH)
 
     def test_it_fits_the_pi_panel(self, controller, weather):
-        """566x384 beside the bar has to stay inside 800x480."""
-        from bedliftcontrol.gui import SETTINGS_ROW_WIDTH, WINDOW_PAD
+        """The panel sits between the progress bar and the arrow buttons."""
+        from bedliftcontrol.gui import SETTINGS_ROW_WIDTH
 
-        assert SETTINGS_ROW_WIDTH + 2 * WINDOW_PAD + 60 <= 800
+        assert SETTINGS_ROW_WIDTH + 60 + 200 <= 800
 
 
 class TestSpeedSlider:
@@ -1438,7 +1454,7 @@ class TestSpeedSlider:
 
         built = BedGui(controller, weather)
         customtkinter.CTkSlider.reset_mock()
-        built._settings_window()
+        built._show_view(gui_module.VIEW_SETTINGS)
         return built
 
     def test_it_spans_four_hundred_to_a_thousand(self, opened):
@@ -1705,7 +1721,7 @@ class TestRopeDelaySetting:
 
         built = BedGui(controller, weather, inverter=FakeInverter())
         customtkinter.CTkSlider.reset_mock()
-        built._settings_window()
+        built._show_view(gui_module.VIEW_SETTINGS)
         return built
 
     def test_the_slider_spans_zero_to_twenty(self, settings):
@@ -1757,76 +1773,92 @@ class TestWeekdayLabel:
         gui.weather_day.configure.assert_any_call(text="")
 
 
-class TestCloseButtons:
-    """A touch panel has no comfortable window decoration, so both windows that are
-    opened often carry their own close button."""
+class TestBackButton:
+    """The panels replaced their windows, so the way out is a button in the centre
+    area instead of a close button at the bottom of a window."""
 
     @staticmethod
-    def close_button(window_name):
+    def back_button_calls():
         import customtkinter
 
         return [c for c in customtkinter.CTkButton.call_args_list
-                if c.kwargs.get("text") == "Schliessen"]
+                if c.kwargs.get("text") == gui_module.BACK_BUTTON_TEXT]
 
-    def test_the_settings_window_has_one(self, gui):
-        import customtkinter
-
-        customtkinter.CTkButton.reset_mock()
-        gui._settings_window()
-        assert self.close_button("settings")
-
-    def test_it_spans_the_three_buttons_above(self, gui):
-        import customtkinter
-
-        customtkinter.CTkButton.reset_mock()
-        gui._settings_window()
-        width = self.close_button("settings")[0].kwargs["width"]
-        assert width == gui_module.SETTINGS_ROW_WIDTH
-
-    def test_the_corrections_window_has_one(self, gui, controller):
-        import customtkinter
-
-        controller.at_bottom = True
-        customtkinter.CTkButton.reset_mock()
-        gui._corrections_window()
-        assert self.close_button("corrections")
-
-    def test_it_spans_both_correction_columns(self, gui):
-        import customtkinter
-
-        customtkinter.CTkButton.reset_mock()
-        gui._corrections_window()
-        width = self.close_button("corrections")[0].kwargs["width"]
-        assert width == gui_module.CORRECTION_ROW_WIDTH
-
-    def test_it_closes_the_settings_window(self, gui):
-        import customtkinter
-
-        customtkinter.CTkButton.reset_mock()
-        gui._settings_window()
-        assert "settings" in gui._open_windows
-        self.close_button("settings")[0].kwargs["command"]()
-        assert "settings" not in gui._open_windows
-
-    def test_it_closes_the_corrections_window(self, gui):
-        import customtkinter
-
-        customtkinter.CTkButton.reset_mock()
-        gui._corrections_window()
-        assert "corrections" in gui._open_windows
-        self.close_button("corrections")[0].kwargs["command"]()
-        assert "corrections" not in gui._open_windows
+    def test_it_exists(self, gui):
+        assert self.back_button_calls()
 
     def test_it_is_big_enough_for_a_finger(self, gui):
-        import customtkinter
+        assert self.back_button_calls()[0].kwargs["height"] == gui_module.BACK_BUTTON_HEIGHT
 
-        customtkinter.CTkButton.reset_mock()
-        gui._settings_window()
-        assert self.close_button("settings")[0].kwargs["height"] == gui_module.CLOSE_BUTTON_HEIGHT
+    def test_it_sits_on_the_right(self, gui):
+        gui.back_button.pack.assert_called_with(side="right")
+
+    def test_the_weather_view_has_no_header(self, gui):
+        """Nothing may move in the view the user looks at all day."""
+        gui.view_header.pack.reset_mock()
+        gui._show_view(gui_module.VIEW_WEATHER)
+        assert not gui.view_header.pack.called
+
+    def test_a_panel_shows_the_header(self, gui):
+        gui._show_view(gui_module.VIEW_SETTINGS)
+        gui.view_header.pack.assert_called()
+
+    def test_going_back_hides_it_again(self, gui):
+        gui._show_view(gui_module.VIEW_SETTINGS)
+        gui.view_header.pack_forget.reset_mock()
+        gui._go_back()
+        gui.view_header.pack_forget.assert_called()
+
+    @pytest.mark.parametrize("view, target", [
+        ("settings", "weather"),
+        ("corrections", "weather"),
+        ("history", "settings"),
+        ("icons", "settings"),
+    ])
+    def test_where_it_leads(self, gui, view, target):
+        gui._show_view(view)
+        gui._go_back()
+        assert gui._view == target
+
+    def test_the_settings_are_reachable_again_from_the_history(self, gui):
+        gui._show_view(gui_module.VIEW_SETTINGS)
+        gui._show_history()
+        gui._go_back()
+        assert gui._kiosk_button is not None, "the settings were rebuilt, not just shown"
+
+
+class TestTheWeatherSurvivesAPanel:
+    """The weather is unpacked, never destroyed: the refresh keeps writing into it."""
+
+    def test_it_is_hidden_while_a_panel_is_up(self, gui):
+        gui._show_view(gui_module.VIEW_SETTINGS)
+        gui.weather_view.pack_forget.assert_called()
+
+    def test_it_comes_back(self, gui):
+        gui._show_view(gui_module.VIEW_SETTINGS)
+        gui.weather_view.pack.reset_mock()
+        gui._go_back()
+        gui.weather_view.pack.assert_called()
+
+    def test_a_refresh_behind_a_panel_does_not_raise(self, gui, weather):
+        from bedliftcontrol.weather import Weather
+
+        gui._show_view(gui_module.VIEW_SETTINGS)
+        weather.current = Weather("Thun", 21.0, "Klar", "sun", f"{FIXED_TODAY}T08:00")
+        gui._apply_weather()
+        gui.weather_city.configure.assert_any_call(text="Thun")
+
+    def test_the_panel_is_emptied_on_the_way_out(self, gui):
+        """Left standing, the old panel's widgets would pile up under the new one."""
+        gui._show_view(gui_module.VIEW_SETTINGS)
+        gui.panel_view.winfo_children.return_value = [MagicMock(), MagicMock()]
+        children = gui.panel_view.winfo_children.return_value
+        gui._go_back()
+        assert all(child.destroy.called for child in children)
 
 
 class TestWindowPlacement:
-    """Both windows open where the hand already is: right of the bar, at the top."""
+    """The two remaining windows open where the hand already is: right of the bar."""
 
     @pytest.fixture
     def positioned(self, gui):
@@ -1834,24 +1866,28 @@ class TestWindowPlacement:
         gui.progress_frame.winfo_width.return_value = 48
         return gui
 
-    def test_the_settings_window_sits_beside_the_bar(self, positioned):
-        positioned._settings_window()
-        window = positioned._open_windows["settings"]
-        assert window.geometry.call_args.args[0] == "+60+0"
-
-    def test_the_corrections_window_sits_beside_the_bar(self, positioned):
-        positioned._corrections_window()
-        window = positioned._open_windows["corrections"]
+    def test_the_secure_prompt_sits_beside_the_bar(self, positioned):
+        positioned._secure_bed_window()
+        window = positioned._open_windows["secure"]
         assert window.geometry.call_args.args[0] == "+60+0"
 
     def test_the_size_is_set_before_the_position(self, positioned):
         """geometry() with only a position keeps the size that was set before it."""
-        positioned._settings_window()
-        window = positioned._open_windows["settings"]
+        positioned._secure_bed_window()
+        window = positioned._open_windows["secure"]
         calls = [str(c.args[0]) for c in window.geometry.call_args_list]
         assert len(calls) >= 2
         assert "x" in calls[0] and not calls[0].startswith("+")
         assert calls[-1] == "+60+0"
+
+    def test_the_prompt_still_has_a_close_button(self, positioned):
+        import customtkinter
+
+        customtkinter.CTkButton.reset_mock()
+        positioned._secure_bed_window()
+        heights = [c.kwargs.get("height") for c in customtkinter.CTkButton.call_args_list
+                   if c.kwargs.get("text") == "OK"]
+        assert heights == [gui_module.CLOSE_BUTTON_HEIGHT]
 
 
 class TestMidnightRollover:
@@ -1966,7 +2002,7 @@ class TestInstallUpdates:
         monkeypatch.setattr(gui_module.os, "execv", MagicMock())
         updater = FakeUpdater()
         built = BedGui(controller, weather, updater=updater)
-        built._settings_window()
+        built._show_view(gui_module.VIEW_SETTINGS)
         return built, updater
 
     def test_the_menu_bar_has_no_update_button(self, controller, weather):
@@ -2092,7 +2128,7 @@ class TestRestart:
 
 
 class TestCorrectionsPower:
-    """The correction buttons drive motors, so mains follows the window."""
+    """The correction buttons drive motors, so mains follows the panel."""
 
     @pytest.fixture
     def gui_with_power(self, controller, weather):
@@ -2103,46 +2139,46 @@ class TestCorrectionsPower:
 
     def test_opening_switches_it_on(self, gui_with_power):
         built, inverter = gui_with_power
-        built._corrections_window()
+        built._show_view(gui_module.VIEW_CORRECTIONS)
         assert inverter.on is True
 
     def test_the_button_shows_it(self, gui_with_power):
         built, _ = gui_with_power
-        built._corrections_window()
+        built._show_view(gui_module.VIEW_CORRECTIONS)
         assert built.power_button.configure.call_args.kwargs["fg_color"] == gui_module.POWER_ON_COLOR
 
     def test_closing_switches_it_off(self, gui_with_power):
         built, inverter = gui_with_power
-        built._corrections_window()
-        built._corrections_window()
+        built._show_view(gui_module.VIEW_CORRECTIONS)
+        built._go_back()
         assert inverter.on is False
 
     def test_closing_updates_the_button(self, gui_with_power):
         built, _ = gui_with_power
-        built._corrections_window()
-        built._on_window_closed("corrections")
+        built._show_view(gui_module.VIEW_CORRECTIONS)
+        built._go_back()
         assert built.power_button.configure.call_args.kwargs["fg_color"] == gui_module.POWER_OFF_COLOR
 
     def test_a_starting_movement_does_not_take_mains_down(self, gui_with_power, controller):
         """The window is closed when a movement starts - but that movement needs power."""
         built, inverter = gui_with_power
-        built._corrections_window()
+        built._show_view(gui_module.VIEW_CORRECTIONS)
         built._start_move(MoveContext.UP, controller.move_up)
         assert inverter.on is True
 
     def test_mains_is_left_alone_while_the_motors_run(self, gui_with_power, controller):
         built, inverter = gui_with_power
-        built._corrections_window()
+        built._show_view(gui_module.VIEW_CORRECTIONS)
         controller.is_moving = True
-        built._on_window_closed("corrections")
+        built._go_back()
         assert inverter.on is True
 
-    def test_closing_another_window_changes_nothing(self, gui_with_power):
+    def test_leaving_the_settings_again_changes_nothing(self, gui_with_power):
+        """Only the corrections own the mains; the other panels must not touch it."""
         built, inverter = gui_with_power
-        built._corrections_window()
-        built._settings_window()
-        built._on_window_closed("settings")
-        assert inverter.on is True
+        built._show_view(gui_module.VIEW_SETTINGS)
+        built._go_back()
+        assert inverter.on is False
 
 
 class TestTouchFriendliness:
@@ -2163,10 +2199,10 @@ class TestTouchFriendliness:
         customtkinter.CTkButton.reset_mock()
         customtkinter.CTkOptionMenu.reset_mock()
         controller.at_bottom = True
-        gui._settings_window()
-        gui._corrections_window()
-        gui._history_window()
-        gui._weather_icons_window()
+        gui._show_view(gui_module.VIEW_SETTINGS)
+        gui._show_view(gui_module.VIEW_CORRECTIONS)
+        gui._show_history()
+        gui._show_weather_icons()
         assert self.constructions(), "nothing was built, the test proves nothing"
         for call in self.constructions():
             assert call.kwargs.get("hover") is False, call.kwargs.get("text")
@@ -2414,5 +2450,5 @@ class TestWarnedLocationsInTheDropdown:
     def test_the_dropdown_opens_on_the_marked_label(self, gui, weather):
         weather.selected = "chatel"
         weather.warned_locations.return_value = {"chatel"}
-        gui._settings_window()
+        gui._show_view(gui_module.VIEW_SETTINGS)
         gui._location_menu.set.assert_called_once_with(f"{gui_module.WARNING_MARKER}Châtel")

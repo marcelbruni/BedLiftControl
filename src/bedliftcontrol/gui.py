@@ -70,18 +70,22 @@ BAR_BUTTON_WIDTH = 90
 BAR_BUTTON_HEIGHT = 45
 BAR_PAD_Y = 5
 BAR_FONT_SIZE = 18  # the glyphs and labels are read from arm's length
-LOCATION_MENU_WIDTH = 300
+LOCATION_MENU_WIDTH = 250  # same width as the sliders above it, see SETTINGS_SLIDER_WIDTH
 KIOSK_BUTTON_WIDTH = 190   # the longest label of the three, side by side in one row
 SETTINGS_BUTTON_WIDTH = 120
-SETTINGS_SLIDER_WIDTH = 300
+# narrow enough that the settings panel is no wider than the weather it replaces -
+# otherwise the centre area grows and the arrow buttons shrink under the finger
+SETTINGS_SLIDER_WIDTH = 250
 SETTINGS_VALUE_WIDTH = 60
 # the three buttons side by side, including the gaps between them
 SETTINGS_ROW_WIDTH = KIOSK_BUTTON_WIDTH + 2 * SETTINGS_BUTTON_WIDTH + 32
 VERSION_ROW_HEIGHT = 28  # one line of text, one standard button
 CLOSE_BUTTON_HEIGHT = 44  # a finger, not a mouse pointer
+BACK_BUTTON_TEXT = "← Zurück"
+BACK_BUTTON_WIDTH = 110
+BACK_BUTTON_HEIGHT = 36
+BACK_ROW_PAD = 8  # between the back button and the panel under it
 HISTORY_ROW_PITCH = 26
-HISTORY_WIDTH = 420
-HISTORY_HEADER_HEIGHT = 110  # the nights counter and the section title above the list
 COUNTDOWN_TICK_MS = 250
 COUNTDOWN_FONT_SIZE = 22  # the countdown is short lines, not one word
 POWER_ON_COLOR = "#c62828"  # red while mains is live: a warning, not a status
@@ -107,14 +111,10 @@ RAIN_DROP_SIZE = 11         # drawn, because Noto Color Emoji has no drop on the
 RAIN_COLOR = "#5aa0e0"
 
 WINDOW_PAD = 16  # inner padding shared by the child windows
-# The Pi panel is 800x480; leave room for the title bar so a window fits whole and its
-# content scrolls inside it instead of running off the bottom of the screen.
-SCREEN_MARGIN = 70
 
-# reference window listing every weather code with its icon
+# reference table listing every weather code with its icon
 ICON_TABLE_ICON_SIZE = 26
 ICON_TABLE_ROW_HEIGHT = 26
-ICON_TABLE_ROW_PITCH = ICON_TABLE_ROW_HEIGHT + 4  # row height plus the grid pady
 ICON_TABLE_COLUMNS = [  # (header, width, anchor)
     ("Code", 50, "e"),
     ("Icon", 60, "center"),
@@ -139,6 +139,21 @@ def _panel_background() -> str:
     if isinstance(color, (list, tuple)):
         return color[1] if APPEARANCE_MODE == "dark" else color[0]
     return color
+
+
+VIEW_WEATHER = "weather"
+VIEW_SETTINGS = "settings"
+VIEW_CORRECTIONS = "corrections"
+VIEW_HISTORY = "history"
+VIEW_ICONS = "icons"
+# Where the back button leads from each panel. The weather is the ground floor and has
+# no back button at all.
+BACK_TARGET = {
+    VIEW_SETTINGS: VIEW_WEATHER,
+    VIEW_CORRECTIONS: VIEW_WEATHER,
+    VIEW_HISTORY: VIEW_SETTINGS,
+    VIEW_ICONS: VIEW_SETTINGS,
+}
 
 
 class MoveContext(Enum):
@@ -176,6 +191,7 @@ class BedGui:
         self._update_button = None
         self._forecast_labels = []
         self._rendered_forecast_key = None
+        self._view = VIEW_WEATHER
         self._build()
 
     def _build(self) -> None:
@@ -193,11 +209,11 @@ class BedGui:
         bottom.pack(side="bottom", fill="x")
         bar_font = ctk.CTkFont(size=BAR_FONT_SIZE)
         ctk.CTkButton(bottom, text="⚙", width=BAR_BUTTON_WIDTH, height=BAR_BUTTON_HEIGHT,
-                      font=bar_font, command=self._settings_window, hover=False).pack(
+                      font=bar_font, command=self._on_settings_button, hover=False).pack(
             side="left", padx=4, pady=BAR_PAD_Y)
         self.corrections_button = ctk.CTkButton(
             bottom, text="↑↓", width=BAR_BUTTON_WIDTH, height=BAR_BUTTON_HEIGHT,
-            font=bar_font, command=self._corrections_window, hover=False)
+            font=bar_font, command=self._on_corrections_button, hover=False)
         self.corrections_button.pack(side="left", padx=4, pady=BAR_PAD_Y)
         self.power_button = ctk.CTkButton(
             bottom, text="230V", width=BAR_BUTTON_WIDTH, height=BAR_BUTTON_HEIGHT,
@@ -224,13 +240,24 @@ class BedGui:
         self.progress_label = ctk.CTkLabel(left, text="", width=48)
         self.progress_label.pack(side="bottom", pady=4)
 
-        # center weather panel: two independent blocks stacked in one column
-        center = ctk.CTkFrame(self.app, fg_color="transparent")
-        center.pack(side="left", fill="both", expand=True, padx=20, pady=(20, 0))
-        self._build_current_panel(center)
-        self._build_forecast_panel(center)
+        # centre area: shows either the weather or one of the panels opened from the bar.
+        # The weather is only unpacked, never destroyed, so the five-second refresh keeps
+        # writing into it and it comes back exactly as it was.
+        self.center = ctk.CTkFrame(self.app, fg_color="transparent")
+        self.center.pack(side="left", fill="both", expand=True, padx=20, pady=(20, 0))
+        self.view_header = ctk.CTkFrame(self.center, fg_color="transparent",
+                                        height=BACK_BUTTON_HEIGHT)
+        self.back_button = ctk.CTkButton(
+            self.view_header, text=BACK_BUTTON_TEXT, width=BACK_BUTTON_WIDTH,
+            height=BACK_BUTTON_HEIGHT, command=self._go_back, hover=False)
+        self.back_button.pack(side="right")
+        self.weather_view = ctk.CTkFrame(self.center, fg_color="transparent")
+        self.panel_view = ctk.CTkFrame(self.center, fg_color="transparent")
+        self.weather_view.pack(fill="both", expand=True)
+        self._build_current_panel(self.weather_view)
+        self._build_forecast_panel(self.weather_view)
         # last-updated line belongs to neither block, it reports the age of the fetch
-        self.weather_updated = ctk.CTkLabel(center, text="", font=ctk.CTkFont(size=11), text_color="#888888")
+        self.weather_updated = ctk.CTkLabel(self.weather_view, text="", font=ctk.CTkFont(size=11), text_color="#888888")
         self.weather_updated.pack(side="bottom", pady=(0, 4))
 
         # right up/down control buttons
@@ -345,10 +372,11 @@ class BedGui:
         self._set_enabled(self.corrections_button, False)
         self._move_context = context
         self._pending_move = action
-        # the bed is about to leave its end stop, so a correction window still standing
-        # open would be aimed at a position that no longer exists. Closed after the
-        # pending move is set, so it does not take mains down with it.
-        self._on_window_closed("corrections")
+        # the bed is about to leave its end stop, so a correction panel still showing
+        # would be aimed at a position that no longer exists. Left after the pending
+        # move is set, so it does not take mains down with it.
+        if self._view == VIEW_CORRECTIONS:
+            self._show_view(VIEW_WEATHER)
         self._show_stop_button()
         self.inverter.turn_on()
         self._update_power_button()
@@ -560,6 +588,46 @@ class BedGui:
             self.app.after_cancel(self._correction_timer)
             self._correction_timer = None
 
+    def _show_view(self, view: str) -> None:
+        """Swap what the centre area shows. Re-entering the current view does nothing."""
+        if view == self._view:
+            return
+        self._leave_view(self._view)
+        self._view = view
+        for child in self.panel_view.winfo_children():
+            child.destroy()
+        if view == VIEW_WEATHER:
+            self.panel_view.pack_forget()
+            self.view_header.pack_forget()
+            self.weather_view.pack(fill="both", expand=True)
+            return
+        self.weather_view.pack_forget()
+        self.view_header.pack(side="top", fill="x", pady=(0, BACK_ROW_PAD))
+        self.panel_view.pack(fill="both", expand=True)
+        VIEW_BUILDERS[view](self)
+
+    def _leave_view(self, view: str) -> None:
+        """Whatever the panel switched on has to be switched off again here."""
+        if view == VIEW_SETTINGS:
+            self._kiosk_button = None
+            self._rope_value_label = None
+            self._update_button = None
+        if view == VIEW_CORRECTIONS:
+            # the buttons are about to be destroyed, so no release event is coming
+            self._cancel_correction_timer()
+            self._end_correction_hold()
+            self._release_power_if_idle()
+
+    def _go_back(self) -> None:
+        self._show_view(BACK_TARGET.get(self._view, VIEW_WEATHER))
+
+    def _on_settings_button(self) -> None:
+        """The bar button leads into the settings, and out of them again."""
+        self._show_view(VIEW_WEATHER if self._view == VIEW_SETTINGS else VIEW_SETTINGS)
+
+    def _on_corrections_button(self) -> None:
+        self._show_view(VIEW_WEATHER if self._view == VIEW_CORRECTIONS else VIEW_CORRECTIONS)
+
     def _toggle_window(self, name: str, builder) -> None:
         window = self._open_windows.get(name)
         if window is not None:
@@ -577,15 +645,6 @@ class BedGui:
 
     def _on_window_closed(self, name: str) -> None:
         window = self._open_windows.pop(name, None)
-        if name == "settings":
-            self._kiosk_button = None
-            self._rope_value_label = None
-            self._update_button = None
-        if name == "corrections":
-            # the buttons are about to be destroyed, so no release event is coming
-            self._cancel_correction_timer()
-            self._end_correction_hold()
-            self._release_power_if_idle()
         if name == "secure" and window is not None:
             self._release_power_if_idle()
         if window is not None:
@@ -606,13 +665,8 @@ class BedGui:
         left_edge = self.progress_frame.winfo_rootx() + self.progress_frame.winfo_width()
         window.geometry(f"+{left_edge}+0")
 
-    def _settings_window(self) -> None:
-        self._toggle_window("settings", self._build_settings_window)
-
-    def _build_settings_window(self):
-        window = ctk.CTkToplevel(self.app)
-        window.title("Settings")
-        content = ctk.CTkFrame(window, fg_color="transparent")
+    def _build_settings_view(self) -> None:
+        content = ctk.CTkFrame(self.panel_view, fg_color="transparent")
         content.pack(expand=True)
         config = self.controller.config
         self._steps_value_label = self._add_slider_row(
@@ -638,23 +692,10 @@ class BedGui:
                                            width=KIOSK_BUTTON_WIDTH, command=self._toggle_kiosk, hover=False)
         self._kiosk_button.pack(side="left", padx=(0, 8))
         ctk.CTkButton(buttons, text="Wetter-Icons", width=SETTINGS_BUTTON_WIDTH,
-                      command=self._weather_icons_window, hover=False).pack(side="left", padx=8)
+                      command=self._show_weather_icons, hover=False).pack(side="left", padx=8)
         ctk.CTkButton(buttons, text="Historie", width=SETTINGS_BUTTON_WIDTH,
-                      command=self._history_window, hover=False).pack(side="left", padx=(8, 0))
+                      command=self._show_history, hover=False).pack(side="left", padx=(8, 0))
         self._build_version_row(content, row=5)
-        self._add_close_button(content, row=6, width=SETTINGS_ROW_WIDTH,
-                               name="settings", columnspan=3)
-        window.geometry(self._settings_geometry(content))
-        self._place_beside_the_bar(window)
-        return window
-
-    @staticmethod
-    def _settings_geometry(content) -> str:
-        """Measured, not fixed: the German row labels are wider than the English ones
-        were, and a fixed width cut the value column off."""
-        content.update_idletasks()
-        return (f"{content.winfo_reqwidth() + 2 * WINDOW_PAD}"
-                f"x{content.winfo_reqheight() + 2 * WINDOW_PAD}")
 
     def _build_version_row(self, parent, row: int) -> None:
         """What is running, next to the only way to change it. Same width as the button
@@ -708,9 +749,6 @@ class BedGui:
         self._store_setting("speed_pps", float(value),
                             self._speed_value_label, str(int(value)))
 
-    def _corrections_window(self) -> None:
-        self._toggle_window("corrections", self._build_corrections_window)
-
     def _release_power_if_idle(self) -> None:
         """Mains goes off with the window - unless a movement is running or starting,
         which needs it and switches it off itself at the end stop."""
@@ -718,15 +756,12 @@ class BedGui:
             return
         self._switch_off_after_move()
 
-    def _build_corrections_window(self):
-        # the corrections drive the motors, so mains comes on with the window; by the
+    def _build_corrections_view(self) -> None:
+        # the corrections drive the motors, so mains comes on with the panel; by the
         # time a button is aimed at, the inverter has had its start-up
         self.inverter.turn_on()
         self._update_power_button()
-        window = ctk.CTkToplevel(self.app)
-        window.title("Corrections")
-        window.geometry("320x350")
-        content = ctk.CTkFrame(window, fg_color="transparent")
+        content = ctk.CTkFrame(self.panel_view, fg_color="transparent")
         content.pack(expand=True)
         ctk.CTkLabel(content, text="back").grid(row=0, column=0, padx=15, pady=(0, 8))
         ctk.CTkLabel(content, text="front").grid(row=0, column=1, padx=15, pady=(0, 8))
@@ -743,10 +778,6 @@ class BedGui:
                                    height=CORRECTION_BUTTON_HEIGHT, hover=False)
             button.grid(row=row, column=column, padx=15, pady=8)
             self._bind_correction(button, click_action, hold_action)
-        self._add_close_button(content, row=3, width=CORRECTION_ROW_WIDTH,
-                               name="corrections", columnspan=2)
-        self._place_beside_the_bar(window)
-        return window
 
     def _location_labels(self) -> list:
         return [self._location_label(place) for place in LOCATIONS]
@@ -769,14 +800,12 @@ class BedGui:
         self.controller.config.save()
         self._apply_weather()
 
-    def _history_window(self) -> None:
-        self._toggle_window("history", self._build_history_window)
+    def _show_history(self) -> None:
+        self._show_view(VIEW_HISTORY)
 
-    def _build_history_window(self):
-        window = ctk.CTkToplevel(self.app)
-        window.title("Historie")
-        content = ctk.CTkFrame(window, fg_color="transparent")
-        content.pack(padx=WINDOW_PAD, pady=WINDOW_PAD, fill="both", expand=True)
+    def _build_history_view(self) -> None:
+        content = ctk.CTkFrame(self.panel_view, fg_color="transparent")
+        content.pack(fill="both", expand=True)
 
         nights = self.history.nights if self.history is not None else 0
         ctk.CTkLabel(content, text=f"Übernachtungen: {nights}",
@@ -785,9 +814,8 @@ class BedGui:
                      font=ctk.CTkFont(size=13, weight="bold")).pack(anchor="w")
 
         entries = list(reversed(self.history.locations)) if self.history is not None else []
-        visible = self._history_visible_height(window.winfo_screenheight(), len(entries))
-        listing = ctk.CTkScrollableFrame(content, fg_color="transparent",
-                                         width=HISTORY_WIDTH, height=visible)
+        # no height given: the frame takes what the centre area has left and scrolls the rest
+        listing = ctk.CTkScrollableFrame(content, fg_color="transparent")
         listing.pack(fill="both", expand=True, pady=(4, 0))
         if not entries:
             ctk.CTkLabel(listing, text="Noch keine Standorte aufgezeichnet",
@@ -795,13 +823,6 @@ class BedGui:
         for entry in entries:
             ctk.CTkLabel(listing, text=self._format_visit(entry), anchor="w",
                          height=HISTORY_ROW_PITCH).pack(fill="x")
-        return window
-
-    @staticmethod
-    def _history_visible_height(screen_height: int, rows: int) -> int:
-        available = screen_height - SCREEN_MARGIN - 2 * WINDOW_PAD - HISTORY_HEADER_HEIGHT
-        wanted = max(rows, 1) * HISTORY_ROW_PITCH
-        return max(HISTORY_ROW_PITCH, min(wanted, available))
 
     @staticmethod
     def _format_visit(visit) -> str:
@@ -812,33 +833,16 @@ class BedGui:
             stamp = visit.at
         return f"{stamp}   {visit.city}   ({visit.latitude:.4f}, {visit.longitude:.4f})"
 
-    def _weather_icons_window(self) -> None:
-        self._toggle_window("weather_icons", self._build_weather_icons_window)
+    def _show_weather_icons(self) -> None:
+        self._show_view(VIEW_ICONS)
 
-    @staticmethod
-    def _icon_table_visible_height(screen_height: int, rows: int) -> int:
-        """How much of the table is on screen at once - the rest is scrolled to.
-
-        Budgeted so the finished window (this plus the padding above and below) still
-        fits the screen with room for the title bar, which the 800x480 Pi panel needs.
-        """
-        available = screen_height - SCREEN_MARGIN - 2 * WINDOW_PAD
-        wanted = (rows + 1) * ICON_TABLE_ROW_PITCH  # +1 for the header row
-        return max(ICON_TABLE_ROW_PITCH, min(wanted, available))
-
-    def _build_weather_icons_window(self):
+    def _build_weather_icons_view(self) -> None:
         """Reference list of every WMO code with its icon.
 
-        The table is taller than the Pi's 480px panel, so it lives in a scrollable frame
-        and the window is capped to the screen height.
+        The table is far taller than the centre area, so it scrolls.
         """
-        window = ctk.CTkToplevel(self.app)
-        window.title("Wetter-Icons")
-        table_width = sum(width for _, width, _ in ICON_TABLE_COLUMNS) + 12 * len(ICON_TABLE_COLUMNS)
-        visible_height = self._icon_table_visible_height(window.winfo_screenheight(), len(WEATHER_CODES))
-        content = ctk.CTkScrollableFrame(window, fg_color="transparent",
-                                         width=table_width, height=visible_height)
-        content.pack(fill="both", expand=True, padx=WINDOW_PAD, pady=WINDOW_PAD)
+        content = ctk.CTkScrollableFrame(self.panel_view, fg_color="transparent")
+        content.pack(fill="both", expand=True)
 
         header_font = ctk.CTkFont(size=13, weight="bold")
         for column, (title, width, anchor) in enumerate(ICON_TABLE_COLUMNS):
@@ -854,12 +858,6 @@ class BedGui:
             icon = icons.IconCanvas(content, size=ICON_TABLE_ICON_SIZE, background=_panel_background())
             icon.show(icon_key)
             icon.grid(row=row, column=1, padx=6)
-
-        # size the window to the visible part of the table; the rest is scrolled to
-        window.update_idletasks()
-        window.geometry(f"{content.winfo_reqwidth() + 2 * WINDOW_PAD}"
-                        f"x{visible_height + 2 * WINDOW_PAD}")
-        return window
 
     def _refresh_weather(self) -> None:
         self._apply_weather()
@@ -1118,6 +1116,14 @@ class BedGui:
 
     def display(self) -> None:
         self.app.mainloop()
+
+
+VIEW_BUILDERS = {
+    VIEW_SETTINGS: BedGui._build_settings_view,
+    VIEW_CORRECTIONS: BedGui._build_corrections_view,
+    VIEW_HISTORY: BedGui._build_history_view,
+    VIEW_ICONS: BedGui._build_weather_icons_view,
+}
 
 
 def _warning_stamp(stamp: str) -> str:
