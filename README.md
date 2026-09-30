@@ -40,6 +40,7 @@ BedLiftControl/
 │       ├── icons.py         # Canvas-drawn weather icons
 │       ├── inverter.py      # 230V inverter, switched over its remote contact
 │       ├── main.py          # Entry point
+│       ├── connectivity.py  # Is there a line yet? A TCP connect, nothing more
 │       ├── timesync.py      # Keeps the shown clock right when the Pi's is not
 │       ├── update.py        # Looks on GitHub and installs with git
 │       └── weather.py       # Location, forecast and the WMO code table
@@ -215,9 +216,12 @@ La Cure, Schilthorn, Crans-Montana. Every refresh fetches **all** of them in a s
 request and caches the lot to `data/weather.json`, so switching is instant and the
 last readings stay visible when the connection drops.
 
-A refresh runs every 30 minutes, or every minute while it keeps failing, so the
-weather appears as soon as a connection does. The display re-reads the cached values
-every 5 seconds, and that is also what carries it over midnight - no fetch involved:
+A refresh runs once an hour. While offline nothing is fetched at all: instead a plain
+TCP connect to the weather host every 15 seconds asks whether there is a line yet, and
+the real request follows the moment there is - so the weather appears within seconds of
+the hotspot coming up, without a failing request every minute in between. The display
+re-reads the cached values every 5 seconds, and that is also what carries it over
+midnight - no fetch involved:
 
 - Days that are in the past drop out of the week row, so today is always the first
   column. Offline the row simply gets shorter as the days run out.

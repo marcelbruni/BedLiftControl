@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from bedliftcontrol import alerts
+from bedliftcontrol import alerts, connectivity
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +30,10 @@ FORECAST_URL = (
     "&daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
     "&timezone=auto"
 )
-REFRESH_INTERVAL_SECONDS = 1800
-RETRY_INTERVAL_SECONDS = 60
+REFRESH_INTERVAL_SECONDS = 3600
+# While offline nothing is fetched at all; this is only how often the cheap reachability
+# probe runs, so the refresh follows a hotspot coming up within seconds.
+PROBE_INTERVAL_SECONDS = 15
 HTTP_TIMEOUT = 8
 
 
@@ -280,13 +282,13 @@ class WeatherService:
         self,
         path: str = WEATHER_FILE,
         refresh_interval: int = REFRESH_INTERVAL_SECONDS,
-        retry_interval: int = RETRY_INTERVAL_SECONDS,
+        probe_interval: int = PROBE_INTERVAL_SECONDS,
         selected: str = PHONE_LOCATION,
         history=None,
     ):
         self.path = path
         self.refresh_interval = refresh_interval
-        self.retry_interval = retry_interval
+        self.probe_interval = probe_interval
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -443,8 +445,22 @@ class WeatherService:
 
     def _loop(self) -> None:
         while not self._stop.is_set():
-            succeeded = self.refresh_once()
-            self._stop.wait(self.refresh_interval if succeeded else self.retry_interval)
+            if self.refresh_once():
+                self._stop.wait(self.refresh_interval)
+            elif not self._wait_for_connection():
+                return
+
+    def _wait_for_connection(self) -> bool:
+        """Hold until the machine can reach the internet. False when the service stops.
+
+        Waiting first rather than probing first also spaces out the retries when we are
+        online but the API itself is having a bad minute.
+        """
+        while not self._stop.wait(self.probe_interval):
+            if connectivity.is_online():
+                logger.info("Connection is back, fetching the weather")
+                return True
+        return False
 
     def stop(self) -> None:
         self._stop.set()

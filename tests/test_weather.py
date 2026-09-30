@@ -236,41 +236,91 @@ class TestRetryInterval:
     """Requirement: pick the weather up as soon as a connection appears, rather than
     sitting out the full refresh interval."""
 
-    def test_a_failed_refresh_retries_sooner(self, tmp_path, monkeypatch):
+    @staticmethod
+    def service(tmp_path, monkeypatch, fetching):
+        monkeypatch.setattr(weather_module, "fetch_location", lambda: (46.7, 7.6, "Thun"))
+        monkeypatch.setattr(weather_module, "fetch_weather_batch", fetching)
+        return WeatherService(path=str(tmp_path / "weather.json"),
+                              refresh_interval=3600, probe_interval=15)
+
+    @staticmethod
+    def offline(_points):
+        raise OSError("offline")
+
+    @staticmethod
+    def record_waits(service, monkeypatch, stop_after=1):
+        """Records every wait and ends the loop after the given number of them."""
         waits = []
 
-        def boom(_points):
+        def wait(seconds):
+            waits.append(seconds)
+            if len(waits) >= stop_after:
+                service._stop.set()
+                return True
+            return False
+
+        monkeypatch.setattr(service._stop, "wait", wait)
+        return waits
+
+    def test_a_successful_refresh_waits_an_hour(self, tmp_path, monkeypatch):
+        service = self.service(tmp_path, monkeypatch, _batch())
+        waits = self.record_waits(service, monkeypatch)
+        service._loop()
+        assert waits == [3600]
+
+    def test_being_offline_fetches_nothing_at_all(self, tmp_path, monkeypatch):
+        """The old loop retried the full request every minute. Now it only probes."""
+        attempts = []
+
+        def counted(points):
+            attempts.append(points)
             raise OSError("offline")
 
-        monkeypatch.setattr(weather_module, "fetch_location", lambda: (46.7, 7.6, "Thun"))
-        monkeypatch.setattr(weather_module, "fetch_weather_batch", boom)
-        service = WeatherService(path=str(tmp_path / "weather.json"),
-                                 refresh_interval=1800, retry_interval=60)
-
-        def wait(seconds):
-            waits.append(seconds)
-            service._stop.set()
-            return True
-
-        monkeypatch.setattr(service._stop, "wait", wait)
+        service = self.service(tmp_path, monkeypatch, counted)
+        monkeypatch.setattr(weather_module.connectivity, "is_online", lambda: False)
+        self.record_waits(service, monkeypatch, stop_after=5)
         service._loop()
-        assert waits == [60]
+        assert len(attempts) == 1, "one try on start, then nothing until the line is up"
 
-    def test_a_successful_refresh_waits_the_full_interval(self, tmp_path, monkeypatch):
-        waits = []
-        monkeypatch.setattr(weather_module, "fetch_location", lambda: (46.7, 7.6, "Thun"))
-        monkeypatch.setattr(weather_module, "fetch_weather_batch", _batch())
-        service = WeatherService(path=str(tmp_path / "weather.json"),
-                                 refresh_interval=1800, retry_interval=60)
-
-        def wait(seconds):
-            waits.append(seconds)
-            service._stop.set()
-            return True
-
-        monkeypatch.setattr(service._stop, "wait", wait)
+    def test_it_probes_while_offline(self, tmp_path, monkeypatch):
+        service = self.service(tmp_path, monkeypatch, self.offline)
+        monkeypatch.setattr(weather_module.connectivity, "is_online", lambda: False)
+        waits = self.record_waits(service, monkeypatch, stop_after=3)
         service._loop()
-        assert waits == [1800]
+        assert waits == [15, 15, 15]
+
+    def test_the_connection_coming_back_fetches_at_once(self, tmp_path, monkeypatch):
+        """This is the whole point: no waiting out an interval after the hotspot is up."""
+        answers = [False, False, True]
+        results = [OSError("offline"), None]
+
+        def fetching(points):
+            outcome = results.pop(0) if results else None
+            if isinstance(outcome, Exception):
+                raise outcome
+            return _batch()(points)
+
+        service = self.service(tmp_path, monkeypatch, fetching)
+        monkeypatch.setattr(weather_module.connectivity, "is_online",
+                            lambda: answers.pop(0) if answers else True)
+        waits = self.record_waits(service, monkeypatch, stop_after=4)
+        service._loop()
+        assert waits == [15, 15, 15, 3600], "three probes, then the hourly interval"
+        assert service.readings, "the reading arrived without waiting out an interval"
+
+    def test_stopping_ends_the_wait_for_a_connection(self, tmp_path, monkeypatch):
+        service = self.service(tmp_path, monkeypatch, self.offline)
+        monkeypatch.setattr(weather_module.connectivity, "is_online", lambda: False)
+        service._stop.set()
+        service._loop()  # must return at once
+
+    def test_an_api_hiccup_while_online_is_spaced_out(self, tmp_path, monkeypatch):
+        """Reachable but answering badly must not turn into a tight retry loop."""
+        service = self.service(tmp_path, monkeypatch, self.offline)
+        monkeypatch.setattr(weather_module.connectivity, "is_online", lambda: True)
+        waits = self.record_waits(service, monkeypatch, stop_after=2)
+        service._loop()
+        assert waits == [15, 15]
 
 
 class TestFetchWeatherBatch:

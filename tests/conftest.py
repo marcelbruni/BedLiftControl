@@ -17,6 +17,16 @@ sys.modules["customtkinter"] = MagicMock()
 
 
 @pytest.fixture(autouse=True)
+def no_reachability_probe(monkeypatch):
+    """The probe opens a real TCP connection. Offline is the safe default here; a test
+    that wants the line up says so itself.
+    """
+    from bedliftcontrol import connectivity
+
+    monkeypatch.setattr(connectivity, "is_online", lambda *args, **kwargs: False)
+
+
+@pytest.fixture(autouse=True)
 def no_warning_feeds(monkeypatch):
     """No test reaches out to the MeteoAlarm feeds - the network is not a fixture.
 
