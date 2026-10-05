@@ -652,16 +652,40 @@ class TestWarningsInTheService:
         again = WeatherService(path=str(path))
         assert again.warnings_for("hoefen")[0].headline == "Gewitter"
 
-    def test_a_failing_feed_keeps_the_old_ones(self, tmp_path, monkeypatch):
+    def test_an_unreadable_feed_keeps_the_old_ones(self, tmp_path, monkeypatch):
+        """None means we could not find out; the warnings we have stay on screen."""
         from bedliftcontrol import alerts, weather as weather_module
 
         monkeypatch.setattr(alerts, "fetch_warnings",
                             lambda locations: {"hoefen": [self.warning()]})
         service = _service_with_stubbed_fetch(tmp_path, monkeypatch, weather_module)
         service.refresh_once()
-        monkeypatch.setattr(alerts, "fetch_warnings", lambda locations: {})
+        monkeypatch.setattr(alerts, "fetch_warnings", lambda locations: None)
         service.refresh_once()
         assert service.warnings_for("hoefen"), "offline is not the same as all clear"
+
+    def test_an_expired_warning_goes_away(self, tmp_path, monkeypatch):
+        """A readable feed with nothing in it means all clear, and has to clear."""
+        from bedliftcontrol import alerts, weather as weather_module
+
+        monkeypatch.setattr(alerts, "fetch_warnings",
+                            lambda locations: {"hoefen": [self.warning()]})
+        service = _service_with_stubbed_fetch(tmp_path, monkeypatch, weather_module)
+        service.refresh_once()
+        monkeypatch.setattr(alerts, "fetch_warnings", lambda locations: {"hoefen": []})
+        service.refresh_once()
+        assert not service.warnings_for("hoefen")
+
+    def test_a_warning_on_a_key_the_feed_never_answers_for_goes_too(self, tmp_path, monkeypatch):
+        """The phone position gets no warnings, so nothing ever overwrites its entry -
+        one put there by hand or by an older version would otherwise stay forever."""
+        from bedliftcontrol import alerts, weather as weather_module
+
+        service = _service_with_stubbed_fetch(tmp_path, monkeypatch, weather_module)
+        service.warnings["phone"] = [self.warning()]
+        monkeypatch.setattr(alerts, "fetch_warnings", lambda locations: {"hoefen": []})
+        service.refresh_once()
+        assert not service.warnings_for("phone")
 
     def test_the_worst_one_comes_first(self, tmp_path, monkeypatch):
         from bedliftcontrol import alerts, weather as weather_module
@@ -721,3 +745,53 @@ class TestWarningRegions:
         regions = LOCATIONS_BY_KEY["lacure"].regions
         assert any(code.startswith("FR") for code in regions)
         assert any(code.startswith("CH") for code in regions)
+
+
+class TestRepeatedFailuresInTheLog:
+    """Online with a dead API retries every fifteen seconds. A day of full stack traces
+    would push everything worth reading out of the rotating log."""
+
+    @staticmethod
+    def failing_service(tmp_path, monkeypatch):
+        def boom(_points):
+            raise OSError("connection reset")
+
+        monkeypatch.setattr(weather_module, "fetch_location", lambda: (46.7, 7.6, "Thun"))
+        monkeypatch.setattr(weather_module, "fetch_weather_batch", boom)
+        return WeatherService(path=str(tmp_path / "weather.json"))
+
+    def test_the_first_failure_carries_the_traceback(self, tmp_path, monkeypatch, caplog):
+        service = self.failing_service(tmp_path, monkeypatch)
+        with caplog.at_level("INFO", logger="bedliftcontrol.weather"):
+            service.refresh_once()
+        assert caplog.records[-1].levelname == "WARNING"
+        assert caplog.records[-1].exc_info is not None
+
+    def test_the_ones_after_it_are_a_single_line(self, tmp_path, monkeypatch, caplog):
+        service = self.failing_service(tmp_path, monkeypatch)
+        service.refresh_once()
+        caplog.clear()
+        with caplog.at_level("INFO", logger="bedliftcontrol.weather"):
+            service.refresh_once()
+            service.refresh_once()
+        assert [record.exc_info for record in caplog.records] == [None, None]
+        assert "connection reset" in caplog.records[-1].getMessage()
+
+    def test_the_attempt_is_counted(self, tmp_path, monkeypatch, caplog):
+        service = self.failing_service(tmp_path, monkeypatch)
+        for _ in range(4):
+            with caplog.at_level("INFO", logger="bedliftcontrol.weather"):
+                service.refresh_once()
+        assert "attempt 4" in caplog.records[-1].getMessage()
+
+    def test_a_success_in_between_arms_it_again(self, tmp_path, monkeypatch, caplog):
+        """A connection that comes and goes has to report each outage properly."""
+        service = self.failing_service(tmp_path, monkeypatch)
+        service.refresh_once()
+        monkeypatch.setattr(weather_module, "fetch_weather_batch", _batch())
+        service.refresh_once()
+        monkeypatch.setattr(weather_module, "fetch_weather_batch",
+                            lambda _points: (_ for _ in ()).throw(OSError("weg")))
+        with caplog.at_level("INFO", logger="bedliftcontrol.weather"):
+            service.refresh_once()
+        assert caplog.records[-1].exc_info is not None

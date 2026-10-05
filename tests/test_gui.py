@@ -54,7 +54,6 @@ def ctk_widgets(monkeypatch):
 
     for name in WIDGETS:
         getattr(customtkinter, name).side_effect = lambda *args, **kwargs: _widget_mock()
-    monkeypatch.setattr(gui_module, "messagebox", MagicMock())
     yield
     for name in WIDGETS:
         getattr(customtkinter, name).side_effect = None
@@ -543,26 +542,17 @@ class TestKioskMode:
         assert gui._kiosk_button is None
         gui._toggle_kiosk()  # must not raise
 
-    def test_the_way_out_of_kiosk_mode_needs_no_window(self, gui, controller):
-        """The settings used to be a Toplevel that had to be forced over the fullscreen
+    @pytest.mark.parametrize("view", ["settings", "corrections", "secure"])
+    def test_no_panel_needs_a_window_any_more(self, gui, controller, view):
+        """Every panel used to be a Toplevel that had to be forced over the fullscreen
         parent. In the centre area there is nothing left to raise."""
-        controller.config.kiosk = True
-        gui._show_view(gui_module.VIEW_SETTINGS)
-        assert gui._view == gui_module.VIEW_SETTINGS
-        assert not gui._open_windows
+        import customtkinter
 
-    def test_the_remaining_windows_are_still_raised_in_kiosk_mode(self, gui, controller):
         controller.config.kiosk = True
-        gui._secure_bed_window()
-        window = gui._open_windows["secure"]
-        window.lift.assert_called()
-        window.attributes.assert_any_call("-topmost", True)
-
-    def test_they_are_not_forced_on_top_when_windowed(self, gui, controller):
-        controller.config.kiosk = False
-        gui._secure_bed_window()
-        window = gui._open_windows["secure"]
-        assert not any(call.args[:1] == ("-topmost",) for call in window.attributes.call_args_list)
+        customtkinter.CTkToplevel.reset_mock()
+        gui._show_view(view)
+        assert gui._view == view
+        assert not customtkinter.CTkToplevel.called
 
 
 class TestStopButton:
@@ -617,14 +607,14 @@ class TestStopButton:
         controller.is_moving = False
         controller.at_top = False
         gui._poll_movement()
-        assert "secure" not in gui._open_windows
+        assert gui._view != gui_module.VIEW_SECURE
 
     def test_rope_prompt_when_the_top_is_actually_reached(self, gui, controller):
         gui._move_context = MoveContext.UP
         controller.is_moving = False
         controller.at_top = True
         gui._poll_movement()
-        assert "secure" in gui._open_windows
+        assert gui._view == gui_module.VIEW_SECURE
 
 
 class TestIconTable:
@@ -699,32 +689,26 @@ class TestNoPromptBeforeMoving:
     """A tap on an arrow moves the bed. Mains is handled by the app, so there is
     nothing left to confirm before it does."""
 
-    @pytest.fixture
-    def box(self, monkeypatch):
-        fake = MagicMock()
-        monkeypatch.setattr(gui_module, "messagebox", fake)
-        return fake
-
-    def test_lowering_from_the_top_asks_nothing(self, gui, controller, box, elapsed):
-        """No dialog - the rope reminder rides on the countdown instead."""
+    def test_lowering_from_the_top_asks_nothing(self, gui, controller, elapsed):
+        """No prompt of any kind - the rope reminder rides on the countdown instead."""
         controller.at_top = True
         gui._on_down()
-        assert not box.showinfo.called and not box.askokcancel.called
+        assert gui._view == gui_module.VIEW_WEATHER, "no panel, no dialog"
         elapsed[0] += 30
         gui._wait_before_move()
         controller.run_async.assert_called_once_with(controller.move_down)
 
-    def test_raising_from_the_bottom_asks_nothing(self, gui, controller, box):
+    def test_raising_from_the_bottom_asks_nothing(self, gui, controller):
         controller.at_bottom = True
         gui._on_up()
-        assert not box.showinfo.called and not box.askokcancel.called
+        assert gui._view == gui_module.VIEW_WEATHER, "no panel, no dialog"
         controller.run_async.assert_called_once_with(controller.move_up)
 
-    def test_carrying_on_after_a_stop_asks_nothing(self, gui, controller, box):
+    def test_carrying_on_after_a_stop_asks_nothing(self, gui, controller):
         controller.at_top = False
         controller.at_bottom = False
         gui._on_down()
-        assert not box.showinfo.called and not box.askokcancel.called
+        assert gui._view == gui_module.VIEW_WEATHER, "no panel, no dialog"
 
 
 class TestStopButtonLabel:
@@ -750,8 +734,8 @@ class TestStopButtonLabel:
 
 
 class TestEndStopPrompts:
-    """What the bed says when it arrives at an end stop. The prompt is a window of its
-    own, not a system dialog: it has to look like the rest of the app."""
+    """What the bed says when it arrives at an end stop. It is a panel in the centre
+    area like every other one, not a window of its own."""
 
     @staticmethod
     def arrive(gui, controller, context, at_top=False, at_bottom=False):
@@ -764,11 +748,11 @@ class TestEndStopPrompts:
     def test_arriving_at_the_bottom_says_nothing(self, gui, controller):
         """Mains switches itself off down there, so there is nothing left to instruct."""
         self.arrive(gui, controller, MoveContext.DOWN, at_bottom=True)
-        assert "secure" not in gui._open_windows
+        assert gui._view == gui_module.VIEW_WEATHER
 
     def test_arriving_at_the_top_asks_for_the_ropes(self, gui, controller):
         self.arrive(gui, controller, MoveContext.UP, at_top=True)
-        assert "secure" in gui._open_windows
+        assert gui._view == gui_module.VIEW_SECURE
 
     def test_it_says_what_to_do(self, gui, controller):
         import customtkinter
@@ -778,36 +762,32 @@ class TestEndStopPrompts:
         texts = [c.kwargs.get("text") for c in customtkinter.CTkLabel.call_args_list]
         assert "Sicherungsseile anbringen!" in texts
 
-    def test_it_is_no_system_dialog(self, gui, controller, monkeypatch):
+    def test_it_is_no_system_dialog(self, gui, controller):
         """A messagebox is the one window that ignores the CustomTkinter theme."""
-        from bedliftcontrol import gui as module
+        import inspect
 
-        box = MagicMock()
-        monkeypatch.setattr(module, "messagebox", box)
         self.arrive(gui, controller, MoveContext.UP, at_top=True)
-        assert not box.showinfo.called
+        assert "messagebox" not in inspect.getsource(gui_module)
 
-    def test_it_is_acknowledged_with_ok(self, gui, controller):
-        import customtkinter
-
-        customtkinter.CTkButton.reset_mock()
+    def test_the_back_button_leads_to_the_weather(self, gui, controller):
         self.arrive(gui, controller, MoveContext.UP, at_top=True)
-        assert "OK" in [c.kwargs.get("text") for c in customtkinter.CTkButton.call_args_list]
+        gui._go_back()
+        assert gui._view == gui_module.VIEW_WEATHER
 
-    def test_it_sits_where_the_other_windows_sit(self, gui, controller):
+    def test_it_replaces_whatever_panel_was_up(self, gui, controller):
+        """The prompt matters more than the settings somebody left open."""
+        gui._show_view(gui_module.VIEW_SETTINGS)
         self.arrive(gui, controller, MoveContext.UP, at_top=True)
-        window = gui._open_windows["secure"]
-        assert window.geometry.call_args.args[0].startswith("+")
+        assert gui._view == gui_module.VIEW_SECURE
 
     def test_no_prompt_after_a_stop_in_between(self, gui, controller):
         self.arrive(gui, controller, MoveContext.UP)
-        assert "secure" not in gui._open_windows
+        assert gui._view == gui_module.VIEW_WEATHER
 
-    def test_arriving_twice_leaves_one_window(self, gui, controller):
+    def test_a_new_movement_leaves_the_prompt(self, gui, controller):
         self.arrive(gui, controller, MoveContext.UP, at_top=True)
-        first = gui._open_windows["secure"]
-        self.arrive(gui, controller, MoveContext.UP, at_top=True)
-        assert gui._open_windows["secure"] is not first
+        gui._on_down()
+        assert gui._view == gui_module.VIEW_WEATHER
 
 
 class TestCorrectionsButtonGating:
@@ -1481,12 +1461,6 @@ class TestPowerAfterMoving:
     """Mains is switched off again once the bed is parked at an end stop."""
 
     @pytest.fixture
-    def box(self, monkeypatch):
-        fake = MagicMock()
-        monkeypatch.setattr(gui_module, "messagebox", fake)
-        return fake
-
-    @pytest.fixture
     def running(self, controller, weather):
         inverter = FakeInverter(on=True, ready=True)
         controller.is_moving = False
@@ -1500,45 +1474,45 @@ class TestPowerAfterMoving:
         built._move_context = context
         built._poll_movement()
 
-    def test_arriving_at_the_top_switches_it_off(self, running, controller, box):
+    def test_arriving_at_the_top_switches_it_off(self, running, controller):
         built, inverter = running
         self.arrive(built, controller, MoveContext.UP, at_top=True)
-        built._on_window_closed("secure")
+        built._go_back()
         assert inverter.on is False
 
-    def test_arriving_at_the_bottom_switches_it_off(self, running, controller, box):
+    def test_arriving_at_the_bottom_switches_it_off(self, running, controller):
         built, inverter = running
         self.arrive(built, controller, MoveContext.DOWN, at_bottom=True)
         assert inverter.on is False
 
-    def test_the_rope_prompt_comes_while_mains_is_still_on(self, running, controller, box):
+    def test_the_rope_prompt_comes_while_mains_is_still_on(self, running, controller):
         """The motors hold the bed until the ropes are on; only the OK cuts the power."""
         built, inverter = running
         self.arrive(built, controller, MoveContext.UP, at_top=True)
         assert inverter.on is True, "the ropes go on while the motors still hold it"
-        built._on_window_closed("secure")
+        built._go_back()
         assert inverter.on is False
 
-    def test_a_movement_started_from_the_prompt_keeps_mains(self, running, controller, box):
+    def test_a_movement_started_from_the_prompt_keeps_mains(self, running, controller):
         """Closing the window must not cut the power out from under a new movement."""
         built, inverter = running
         self.arrive(built, controller, MoveContext.UP, at_top=True)
         controller.is_moving = True
-        built._on_window_closed("secure")
+        built._go_back()
         assert inverter.on is True
 
-    def test_the_button_follows(self, running, controller, box):
+    def test_the_button_follows(self, running, controller):
         built, inverter = running
         self.arrive(built, controller, MoveContext.UP, at_top=True)
-        built._on_window_closed("secure")
+        built._go_back()
         assert built.power_button.configure.call_args.kwargs["fg_color"] == gui_module.POWER_OFF_COLOR
 
-    def test_a_stop_in_between_leaves_it_running(self, running, controller, box):
+    def test_a_stop_in_between_leaves_it_running(self, running, controller):
         built, inverter = running
         self.arrive(built, controller, MoveContext.DOWN)
         assert inverter.on is True
 
-    def test_the_whole_round_trip(self, controller, weather, box, elapsed):
+    def test_the_whole_round_trip(self, controller, weather, elapsed):
         """Down a bit, STOP, then all the way up: red throughout, off at the top."""
         inverter = FakeInverter()
         built = BedGui(controller, weather, inverter=inverter)
@@ -1559,11 +1533,11 @@ class TestPowerAfterMoving:
         elapsed[0] += 30
         built._wait_before_move()
         self.arrive(built, controller, MoveContext.UP, at_top=True)
-        built._on_window_closed("secure")
+        built._go_back()
         assert inverter.on is False
         assert built.power_button.configure.call_args.kwargs["fg_color"] == gui_module.POWER_OFF_COLOR
 
-    def test_an_inverter_that_is_already_off_is_left_alone(self, controller, weather, box):
+    def test_an_inverter_that_is_already_off_is_left_alone(self, controller, weather):
         built = BedGui(controller, weather, inverter=FakeInverter())
         built.power_button.configure.reset_mock()
         self.arrive(built, controller, MoveContext.DOWN, at_bottom=True)
@@ -1773,6 +1747,52 @@ class TestWeekdayLabel:
         gui.weather_day.configure.assert_any_call(text="")
 
 
+class TestCountdownRedraws:
+    """Every write to the STOP button redraws a large red surface, so the countdown
+    must make as few of them as it can - and the same number either way the bed goes."""
+
+    @pytest.fixture
+    def counting(self, gui):
+        gui.stop_button.configure.reset_mock()
+        return gui
+
+    def test_the_same_second_is_not_rewritten(self, counting):
+        """The countdown ticks four times a second but only changes once."""
+        counting._set_stop_button_text("230V 5s", counting._countdown_font)
+        counting._set_stop_button_text("230V 5s", counting._countdown_font)
+        assert counting.stop_button.configure.call_count == 1
+
+    def test_the_font_is_sent_once_per_phase(self, counting):
+        """Handing CustomTkinter the same font object again still rebinds it and
+        re-measures the whole button."""
+        for second in (5, 4, 3):
+            counting._set_stop_button_text(f"230V {second}s", counting._countdown_font)
+        with_font = [c for c in counting.stop_button.configure.call_args_list
+                     if "font" in c.kwargs]
+        assert len(with_font) == 1
+
+    def test_a_real_font_change_still_gets_through(self, counting):
+        counting._set_stop_button_text("230V 1s", counting._countdown_font)
+        counting.stop_button.configure.reset_mock()
+        counting._set_stop_button_text("STOP", counting._stop_font)
+        assert counting.stop_button.configure.call_args.kwargs["font"] is counting._stop_font
+
+    @pytest.mark.parametrize("context, at_top, at_bottom", [
+        (MoveContext.UP, False, True),
+        (MoveContext.DOWN, True, False),
+    ])
+    def test_both_directions_write_the_same_amount(self, gui, controller,
+                                                   context, at_top, at_bottom):
+        """Whatever the flicker is, it must not depend on which way the bed goes."""
+        controller.at_top = at_top
+        controller.at_bottom = at_bottom
+        gui._move_context = context
+        gui.stop_button.configure.reset_mock()
+        for second in (3, 3, 2, 2, 1, 1):
+            gui._set_stop_button_text(gui._countdown_text(second), gui._countdown_font)
+        assert gui.stop_button.configure.call_count == 3
+
+
 class TestBackButton:
     """The panels replaced their windows, so the way out is a button in the centre
     area instead of a close button at the bottom of a window."""
@@ -1857,37 +1877,36 @@ class TestTheWeatherSurvivesAPanel:
         assert all(child.destroy.called for child in children)
 
 
-class TestWindowPlacement:
-    """The two remaining windows open where the hand already is: right of the bar."""
+class TestNoWindowsLeft:
+    """Nothing opens a Toplevel any more - every panel lives in the centre area."""
 
-    @pytest.fixture
-    def positioned(self, gui):
-        gui.progress_frame.winfo_rootx.return_value = 12
-        gui.progress_frame.winfo_width.return_value = 48
-        return gui
-
-    def test_the_secure_prompt_sits_beside_the_bar(self, positioned):
-        positioned._secure_bed_window()
-        window = positioned._open_windows["secure"]
-        assert window.geometry.call_args.args[0] == "+60+0"
-
-    def test_the_size_is_set_before_the_position(self, positioned):
-        """geometry() with only a position keeps the size that was set before it."""
-        positioned._secure_bed_window()
-        window = positioned._open_windows["secure"]
-        calls = [str(c.args[0]) for c in window.geometry.call_args_list]
-        assert len(calls) >= 2
-        assert "x" in calls[0] and not calls[0].startswith("+")
-        assert calls[-1] == "+60+0"
-
-    def test_the_prompt_still_has_a_close_button(self, positioned):
+    @pytest.mark.parametrize("view", ["settings", "corrections", "history", "icons",
+                                      "secure"])
+    def test_no_panel_opens_a_window(self, gui, view):
         import customtkinter
 
-        customtkinter.CTkButton.reset_mock()
-        positioned._secure_bed_window()
-        heights = [c.kwargs.get("height") for c in customtkinter.CTkButton.call_args_list
-                   if c.kwargs.get("text") == "OK"]
-        assert heights == [gui_module.CLOSE_BUTTON_HEIGHT]
+        customtkinter.CTkToplevel.reset_mock()
+        gui._show_view(view)
+        assert not customtkinter.CTkToplevel.called
+
+    def test_the_warning_opens_no_window_either(self, gui, weather):
+        import customtkinter
+
+        from bedliftcontrol.alerts import WeatherWarning
+
+        weather.warning_on.return_value = WeatherWarning(
+            "Sturm", "Severe", "Bern", "2026-09-30T12:00:00+00:00",
+            "2026-09-30T20:00:00+00:00")
+        customtkinter.CTkToplevel.reset_mock()
+        gui._show_warning("2026-09-30")
+        assert gui._view == gui_module.VIEW_WARNING
+        assert not customtkinter.CTkToplevel.called
+
+    def test_the_source_has_no_toplevel_left(self):
+        """A regression guard: this is the whole point of the rework."""
+        import inspect
+
+        assert "CTkToplevel" not in inspect.getsource(gui_module)
 
 
 class TestMidnightRollover:
@@ -2041,28 +2060,60 @@ class TestInstallUpdates:
         built._update_finished(update.UPDATED)
         assert restarted == [True]
 
-    def test_being_up_to_date_says_so_without_restarting(self, settings, monkeypatch):
+    def test_being_up_to_date_says_so_on_the_button(self, settings, monkeypatch):
         from bedliftcontrol import update
 
         built, _ = settings
-        box = MagicMock()
-        monkeypatch.setattr(gui_module, "messagebox", box)
         monkeypatch.setattr(built, "_restart", MagicMock())
         built._on_update()
         built._update_finished(update.UP_TO_DATE)
-        box.showinfo.assert_called_once()
+        written = built._update_button.configure.call_args.kwargs
+        assert written["text"] == gui_module.UPDATE_UP_TO_DATE_TEXT
         assert not built._restart.called
 
-    def test_a_failure_says_so_and_frees_the_button(self, settings, monkeypatch):
+    def test_a_failure_says_so_on_the_button(self, settings):
         from bedliftcontrol import update
 
         built, _ = settings
-        box = MagicMock()
-        monkeypatch.setattr(gui_module, "messagebox", box)
         built._on_update()
         built._update_finished(update.FAILED)
-        box.showerror.assert_called_once()
-        assert built._update_button.configure.call_args.kwargs["state"] == "normal"
+        assert built._update_button.configure.call_args.kwargs["text"] == gui_module.UPDATE_FAILED_TEXT
+
+    @pytest.mark.parametrize("outcome", ["up_to_date", "failed"])
+    def test_the_button_is_dead_afterwards(self, settings, monkeypatch, outcome):
+        """Nothing more to get, or something pressing again will not mend."""
+        built, _ = settings
+        monkeypatch.setattr(built, "_restart", MagicMock())
+        built._on_update()
+        built._update_finished(outcome)
+        assert built._update_button.configure.call_args.kwargs["state"] == "disabled"
+
+    def test_reopening_the_settings_gives_a_fresh_button(self, settings, monkeypatch):
+        """That is the way to try again - the panel is rebuilt from scratch."""
+        import customtkinter
+
+        built, _ = settings
+        built._on_update()
+        built._update_finished("failed")
+        built._go_back()
+        customtkinter.CTkButton.reset_mock()
+        built._show_view(gui_module.VIEW_SETTINGS)
+        fresh = [c.kwargs for c in customtkinter.CTkButton.call_args_list
+                 if c.kwargs.get("text") == gui_module.UPDATE_BUTTON_TEXT]
+        assert len(fresh) == 1
+        assert "state" not in fresh[0]
+
+    def test_no_system_dialog_is_opened(self, settings, monkeypatch):
+        """A messagebox is the one window that ignores the CustomTkinter theme."""
+        import inspect
+
+        from bedliftcontrol import update
+
+        built, _ = settings
+        monkeypatch.setattr(built, "_restart", MagicMock())
+        built._on_update()
+        built._update_finished(update.FAILED)
+        assert "messagebox" not in inspect.getsource(gui_module)
 
     def test_the_button_says_it_is_working(self, settings, monkeypatch):
         monkeypatch.setattr(gui_module.threading, "Thread", MagicMock())
@@ -2083,15 +2134,14 @@ class TestInstallUpdates:
         built._on_update()
         assert gui_module.threading.Thread.call_count == 1
 
-    def test_closing_the_settings_mid_update_breaks_nothing(self, settings, monkeypatch):
-        """The window is a child of nothing; the pull outlives it."""
+    def test_leaving_the_settings_mid_update_breaks_nothing(self, settings, monkeypatch):
+        """The panel is gone by then; the pull outlives it."""
         from bedliftcontrol import update
 
         built, _ = settings
         monkeypatch.setattr(gui_module.threading, "Thread", MagicMock())
-        monkeypatch.setattr(gui_module, "messagebox", MagicMock())
         built._on_update()
-        built._on_window_closed("settings")
+        built._go_back()
         built._update_finished(update.FAILED)  # must not raise
 
 
@@ -2379,17 +2429,17 @@ class TestWarnings:
         gui._apply_weather()
         assert gui._rendered_forecast_key != first
 
-    def test_tapping_a_warned_day_opens_the_window(self, warned):
+    def test_tapping_a_warned_day_opens_the_panel(self, warned):
         gui, _ = warned
-        gui._warning_window(FIXED_TODAY)
-        assert "warning" in gui._open_windows
+        gui._show_warning(FIXED_TODAY)
+        assert gui._view == gui_module.VIEW_WARNING
 
     def test_tapping_a_quiet_day_opens_nothing(self, warned):
         gui, _ = warned
-        gui._warning_window("2026-09-04")
-        assert "warning" not in gui._open_windows
+        gui._show_warning("2026-09-04")
+        assert gui._view == gui_module.VIEW_WEATHER
 
-    def test_the_window_shows_the_text(self, gui, weather):
+    def test_the_panel_shows_the_text(self, gui, weather):
         import customtkinter
 
         warning = self.warning(f"{FIXED_TODAY}T12:00:00+00:00", f"{FIXED_TODAY}T20:00:00+00:00",
@@ -2397,7 +2447,7 @@ class TestWarnings:
                                instruction="Fahrzeuge sichern.", sender="MeteoSchweiz")
         weather.warning_on.side_effect = lambda key, day: warning
         customtkinter.CTkLabel.reset_mock()
-        gui._warning_window(FIXED_TODAY)
+        gui._show_warning(FIXED_TODAY)
         texts = [c.kwargs.get("text", "") for c in customtkinter.CTkLabel.call_args_list]
         assert "Gewitterwarnung" in texts
         assert "Hagel und Boeen." in texts
@@ -2413,22 +2463,21 @@ class TestWarnings:
         warning = self.warning("gestern", "morgen")
         assert gui._warning_subtitle(warning) == "Bern"
 
-    def test_the_window_has_a_close_button(self, gui, weather):
+    def test_the_text_can_scroll(self, gui, weather):
+        """A CAP text can be a paragraph or a page."""
         import customtkinter
 
         warning = self.warning(f"{FIXED_TODAY}T12:00:00+00:00", f"{FIXED_TODAY}T20:00:00+00:00")
         weather.warning_on.side_effect = lambda key, day: warning
-        customtkinter.CTkButton.reset_mock()
-        gui._warning_window(FIXED_TODAY)
-        assert "Schliessen" in [c.kwargs.get("text") for c in customtkinter.CTkButton.call_args_list]
+        customtkinter.CTkScrollableFrame.reset_mock()
+        gui._show_warning(FIXED_TODAY)
+        assert customtkinter.CTkScrollableFrame.called
 
-    def test_a_second_day_replaces_the_window(self, warned):
-        """Two taps must not leave two windows stacked on each other."""
+    def test_the_back_button_leads_to_the_weather(self, warned):
         gui, _ = warned
-        gui._warning_window(FIXED_TODAY)
-        first = gui._open_windows["warning"]
-        gui._warning_window("2026-09-05")
-        assert gui._open_windows["warning"] is not first
+        gui._show_warning(FIXED_TODAY)
+        gui._go_back()
+        assert gui._view == gui_module.VIEW_WEATHER
 
 
 class TestWarnedLocationsInTheDropdown:

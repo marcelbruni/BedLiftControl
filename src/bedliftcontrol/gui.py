@@ -11,11 +11,10 @@ import time
 import tkinter
 from datetime import datetime
 from enum import Enum
-from tkinter import messagebox
 
 import customtkinter as ctk
 
-from bedliftcontrol import clock, icons
+from bedliftcontrol import clock, icons, logsetup
 from bedliftcontrol.config import (
     ROPE_DELAY_MAX,
     ROPE_DELAY_MIN,
@@ -29,8 +28,6 @@ from bedliftcontrol.weather import LOCATIONS, WEATHER_CODES, WeatherService, loc
 
 logger = logging.getLogger(__name__)
 
-SECURE_WINDOW_WIDTH = 360
-WARNING_WINDOW_WIDTH = 460
 WARNING_TEXT_WIDTH = 420
 WARNING_MARKER = "! "  # prefixes a warned location in the dropdown
 WINDOW_GEOMETRY = "800x420"  # the Pi 7" display is 800x480, kiosk mode takes all of it
@@ -80,7 +77,6 @@ SETTINGS_VALUE_WIDTH = 60
 # the three buttons side by side, including the gaps between them
 SETTINGS_ROW_WIDTH = KIOSK_BUTTON_WIDTH + 2 * SETTINGS_BUTTON_WIDTH + 32
 VERSION_ROW_HEIGHT = 28  # one line of text, one standard button
-CLOSE_BUTTON_HEIGHT = 44  # a finger, not a mouse pointer
 BACK_BUTTON_TEXT = "← Zurück"
 BACK_BUTTON_WIDTH = 110
 BACK_BUTTON_HEIGHT = 36
@@ -91,7 +87,13 @@ COUNTDOWN_FONT_SIZE = 22  # the countdown is short lines, not one word
 POWER_ON_COLOR = "#c62828"  # red while mains is live: a warning, not a status
 POWER_OFF_COLOR = "#555555"
 UPDATE_BUTTON_TEXT = "Updates installieren"
+UPDATE_SEARCHING_TEXT = "sucht…"
+UPDATE_UP_TO_DATE_TEXT = "Bereits aktuell"
+UPDATE_FAILED_TEXT = "Fehlgeschlagen"
 UPDATE_BUTTON_WIDTH = 160
+SECURE_FONT_SIZE = 26  # the one line on the panel, read from across the van
+SECURE_OK_WIDTH = 220
+SECURE_OK_HEIGHT = 56  # a finger reaching past the bed, not a mouse pointer
 
 POLL_INTERVAL_MS = 100
 WEATHER_UI_REFRESH_MS = 5000
@@ -109,8 +111,6 @@ WEATHER_ICON_SIZE = 64      # big icon next to the current temperature
 FORECAST_ICON_SIZE = 34     # one per day, must stay inside FORECAST_COL_WIDTH
 RAIN_DROP_SIZE = 11         # drawn, because Noto Color Emoji has no drop on the Pi
 RAIN_COLOR = "#5aa0e0"
-
-WINDOW_PAD = 16  # inner padding shared by the child windows
 
 # reference table listing every weather code with its icon
 ICON_TABLE_ICON_SIZE = 26
@@ -146,6 +146,8 @@ VIEW_SETTINGS = "settings"
 VIEW_CORRECTIONS = "corrections"
 VIEW_HISTORY = "history"
 VIEW_ICONS = "icons"
+VIEW_SECURE = "secure"
+VIEW_WARNING = "warning"
 # Where the back button leads from each panel. The weather is the ground floor and has
 # no back button at all.
 BACK_TARGET = {
@@ -153,6 +155,8 @@ BACK_TARGET = {
     VIEW_CORRECTIONS: VIEW_WEATHER,
     VIEW_HISTORY: VIEW_SETTINGS,
     VIEW_ICONS: VIEW_SETTINGS,
+    VIEW_SECURE: VIEW_WEATHER,
+    VIEW_WARNING: VIEW_WEATHER,
 }
 
 
@@ -179,12 +183,12 @@ class BedGui:
         self._updating = False
         self._wait_until = 0.0
         self._stop_button_text = "STOP"
+        self._stop_button_font = None
         self._bar_fill_level = 0.0
         self._clock_text = None
         self._kiosk_button = None
         self._correction_timer = None
         self._correction_holding = False
-        self._open_windows: dict[str, object] = {}
         self._steps_value_label = None
         self._speed_value_label = None
         self._rope_value_label = None
@@ -203,6 +207,9 @@ class BedGui:
         self.app.geometry(WINDOW_GEOMETRY)
         # a touch display has no keyboard, but on a dev machine Escape is a quick way out
         self.app.bind("<Escape>", lambda _event: self._leave_kiosk())
+        # every timer tick and button press runs inside a Tk callback; without this
+        # their exceptions go to stderr, which nobody on the Pi ever sees
+        self.app.report_callback_exception = logsetup.log_callback_exception
 
         # bottom action bar
         bottom = ctk.CTkFrame(self.app, corner_radius=0)
@@ -375,7 +382,7 @@ class BedGui:
         # the bed is about to leave its end stop, so a correction panel still showing
         # would be aimed at a position that no longer exists. Left after the pending
         # move is set, so it does not take mains down with it.
-        if self._view == VIEW_CORRECTIONS:
+        if self._view in (VIEW_CORRECTIONS, VIEW_SECURE):
             self._show_view(VIEW_WEATHER)
         self._show_stop_button()
         self.inverter.turn_on()
@@ -419,10 +426,18 @@ class BedGui:
 
     def _set_stop_button_text(self, text: str, font) -> None:
         """Only on a real change: the countdown ticks four times a second, and
-        rewriting the same text each time makes the button blink."""
+        rewriting the same text each time makes the button blink.
+
+        The font is passed on separately, because handing CustomTkinter the same font
+        object again still makes it rebind and re-measure the whole button.
+        """
         if text == self._stop_button_text:
             return
         self._stop_button_text = text
+        if font is self._stop_button_font:
+            self.stop_button.configure(text=text)
+            return
+        self._stop_button_font = font
         self.stop_button.configure(text=text, font=font)
 
     def _cancel_pending_move(self) -> None:
@@ -444,7 +459,7 @@ class BedGui:
         if self.controller.is_moving or self._updating:
             return
         self._updating = True
-        self._set_update_button("sucht…", "disabled")
+        self._set_update_button(UPDATE_SEARCHING_TEXT, "disabled")
         threading.Thread(target=self._run_update, daemon=True).start()
 
     def _run_update(self) -> None:
@@ -453,18 +468,22 @@ class BedGui:
         self.app.after(0, lambda: self._update_finished(outcome))
 
     def _update_finished(self, outcome: str) -> None:
+        """The answer goes on the button and stays there.
+
+        Disabled afterwards either way: there is nothing more to get, or something is
+        wrong that pressing again will not mend. Leaving the settings builds a fresh
+        button, which is the way to try again. Why it failed is in the log.
+        """
         self._updating = False
         if outcome == update.UPDATED:
             self._restart()
             return
-        self._set_update_button(UPDATE_BUTTON_TEXT, "normal")
-        if outcome == update.UP_TO_DATE:
-            messagebox.showinfo("Update", "Die Software ist aktuell.")
-        else:
-            messagebox.showerror("Update", "Update fehlgeschlagen. Details im Log.")
+        answer = (UPDATE_UP_TO_DATE_TEXT if outcome == update.UP_TO_DATE
+                  else UPDATE_FAILED_TEXT)
+        self._set_update_button(answer, "disabled")
 
     def _set_update_button(self, text: str, state: str) -> None:
-        if self._update_button is not None:  # the settings window may be closed by now
+        if self._update_button is not None:  # the settings panel may be gone by now
             self._update_button.configure(text=text, state=state)
 
     def _restart(self) -> None:
@@ -514,7 +533,7 @@ class BedGui:
         if self._move_context == MoveContext.UP and self.controller.at_top:
             # the ropes go on while the motors still hold the bed, so the prompt comes
             # first and mains is cut once it is acknowledged
-            self._secure_bed_window()
+            self._show_view(VIEW_SECURE)
         elif self._move_context == MoveContext.DOWN and self.controller.at_bottom:
             self._switch_off_after_move()
         self._move_context = None
@@ -524,26 +543,15 @@ class BedGui:
         if self.inverter.turn_off():
             self._update_power_button()
 
-    def _secure_bed_window(self) -> None:
+    def _build_secure_view(self) -> None:
         """The ropes go on while the motors still hold the bed, so mains is only cut
-        once this is acknowledged."""
-        self._on_window_closed("secure")
-        self._toggle_window("secure", self._build_secure_window)
-
-    def _build_secure_window(self):
-        window = ctk.CTkToplevel(self.app)
-        window.title("Bett sichern")
-        content = ctk.CTkFrame(window, fg_color="transparent")
-        content.pack(padx=WINDOW_PAD, pady=WINDOW_PAD, fill="both", expand=True)
+        once this panel is left again."""
+        content = ctk.CTkFrame(self.panel_view, fg_color="transparent")
+        content.pack(expand=True)
         ctk.CTkLabel(content, text="Sicherungsseile anbringen!",
-                     font=ctk.CTkFont(size=20, weight="bold")).grid(row=0, column=0)
-        self._add_close_button(content, row=1, width=SECURE_WINDOW_WIDTH - 2 * WINDOW_PAD,
-                               name="secure", columnspan=1, text="OK")
-        # the window reports a default height until its children are laid out
-        content.update_idletasks()
-        window.geometry(f"{SECURE_WINDOW_WIDTH}x{content.winfo_reqheight() + 2 * WINDOW_PAD}")
-        self._place_beside_the_bar(window)
-        return window
+                     font=ctk.CTkFont(size=SECURE_FONT_SIZE, weight="bold")).pack()
+        ctk.CTkButton(content, text="OK", width=SECURE_OK_WIDTH, height=SECURE_OK_HEIGHT,
+                      command=self._go_back, hover=False).pack(pady=(28, 0))
 
     def _correct(self, action) -> None:
         if self.controller.is_moving:
@@ -617,6 +625,9 @@ class BedGui:
             self._cancel_correction_timer()
             self._end_correction_hold()
             self._release_power_if_idle()
+        if view == VIEW_SECURE:
+            # leaving the panel is the acknowledgement: the ropes are on, mains can go
+            self._release_power_if_idle()
 
     def _go_back(self) -> None:
         self._show_view(BACK_TARGET.get(self._view, VIEW_WEATHER))
@@ -627,43 +638,6 @@ class BedGui:
 
     def _on_corrections_button(self) -> None:
         self._show_view(VIEW_WEATHER if self._view == VIEW_CORRECTIONS else VIEW_CORRECTIONS)
-
-    def _toggle_window(self, name: str, builder) -> None:
-        window = self._open_windows.get(name)
-        if window is not None:
-            self._on_window_closed(name)
-            return
-        window = builder()
-        window.protocol("WM_DELETE_WINDOW", lambda: self._on_window_closed(name))
-        # in kiosk mode the main window covers the screen, so a child window would open
-        # behind it - and the settings window is the only way back out on a touch display
-        window.transient(self.app)
-        window.lift()
-        if self.controller.config.kiosk:
-            window.attributes("-topmost", True)
-        self._open_windows[name] = window
-
-    def _on_window_closed(self, name: str) -> None:
-        window = self._open_windows.pop(name, None)
-        if name == "secure" and window is not None:
-            self._release_power_if_idle()
-        if window is not None:
-            window.destroy()
-
-    def _add_close_button(self, parent, row: int, width: int, name: str, columnspan: int,
-                          text: str = "Schliessen"):
-        """Closing by the window decoration is a small target on a touch panel."""
-        button = ctk.CTkButton(parent, text=text, width=width,
-                               height=CLOSE_BUTTON_HEIGHT,
-                               command=lambda: self._on_window_closed(name), hover=False)
-        button.grid(row=row, column=0, columnspan=columnspan, padx=12, pady=(12, 0))
-        return button
-
-    def _place_beside_the_bar(self, window) -> None:
-        """Right of the progress bar, at the top edge - where the hand already is."""
-        window.update_idletasks()
-        left_edge = self.progress_frame.winfo_rootx() + self.progress_frame.winfo_width()
-        window.geometry(f"+{left_edge}+0")
 
     def _build_settings_view(self) -> None:
         content = ctk.CTkFrame(self.panel_view, fg_color="transparent")
@@ -900,48 +874,35 @@ class BedGui:
         warning = self._warning_for(day)
         return warning.color if warning is not None else None
 
-    def _warning_window(self, day: str) -> None:
+    def _show_warning(self, day: str) -> None:
         """Opened by tapping the marked icon; does nothing where there is no warning."""
         warning = self._warning_for(day)
         if warning is None:
             return
-        self._on_window_closed("warning")  # a second tap swaps the day, not two windows
         self._shown_warning = warning
-        self._toggle_window("warning", self._build_warning_window)
+        self._show_view(VIEW_WARNING)
 
-    def _build_warning_window(self):
+    def _build_warning_view(self) -> None:
+        """A CAP text can be a paragraph or a page, so it scrolls."""
         warning = self._shown_warning
-        window = ctk.CTkToplevel(self.app)
-        window.title("Wetterwarnung")
-        content = ctk.CTkFrame(window, fg_color="transparent")
-        content.pack(padx=WINDOW_PAD, pady=WINDOW_PAD, fill="both", expand=True)
+        content = ctk.CTkScrollableFrame(self.panel_view, fg_color="transparent")
+        content.pack(fill="both", expand=True)
 
-        headline = warning.headline or warning.event
-        ctk.CTkLabel(content, text=headline, font=ctk.CTkFont(size=18, weight="bold"),
-                     wraplength=WARNING_TEXT_WIDTH, justify="left", anchor="w").grid(
-            row=0, column=0, sticky="w")
+        ctk.CTkLabel(content, text=warning.headline or warning.event,
+                     font=ctk.CTkFont(size=18, weight="bold"),
+                     wraplength=WARNING_TEXT_WIDTH, justify="left", anchor="w").pack(
+            anchor="w")
         ctk.CTkLabel(content, text=self._warning_subtitle(warning), text_color="#888888",
-                     wraplength=WARNING_TEXT_WIDTH, justify="left", anchor="w").grid(
-            row=1, column=0, sticky="w", pady=(2, 10))
-        row = 2
+                     wraplength=WARNING_TEXT_WIDTH, justify="left", anchor="w").pack(
+            anchor="w", pady=(2, 10))
         for body in (warning.description, warning.instruction):
             if not body:
                 continue
             ctk.CTkLabel(content, text=body, wraplength=WARNING_TEXT_WIDTH,
-                         justify="left", anchor="w").grid(row=row, column=0, sticky="w",
-                                                          pady=(0, 8))
-            row += 1
+                         justify="left", anchor="w").pack(anchor="w", pady=(0, 8))
         if warning.sender:
             ctk.CTkLabel(content, text=f"Quelle: {warning.sender} über MeteoAlarm",
-                         text_color="#888888", anchor="w").grid(row=row, column=0,
-                                                                sticky="w", pady=(4, 0))
-            row += 1
-        self._add_close_button(content, row=row, width=WARNING_TEXT_WIDTH,
-                               name="warning", columnspan=1)
-        content.update_idletasks()
-        window.geometry(f"{WARNING_WINDOW_WIDTH}x{content.winfo_reqheight() + 2 * WINDOW_PAD}")
-        self._place_beside_the_bar(window)
-        return window
+                         text_color="#888888", anchor="w").pack(anchor="w", pady=(4, 0))
 
     @staticmethod
     def _warning_subtitle(warning) -> str:
@@ -1094,7 +1055,7 @@ class BedGui:
             icon = icons.IconCanvas(self.forecast_frame, size=FORECAST_ICON_SIZE, background=_panel_background())
             icon.show(day.icon, self._warning_color(day.date))
             icon.grid(row=1, column=index, padx=8, pady=2)
-            icon.bind("<Button-1>", lambda _event, when=day.date: self._warning_window(when))
+            icon.bind("<Button-1>", lambda _event, when=day.date: self._show_warning(when))
             self._forecast_labels.append(icon)
             for row, (text, font, color) in enumerate(rows):
                 label = ctk.CTkLabel(self.forecast_frame, text=text, anchor="center", font=font, text_color=color)
@@ -1123,6 +1084,8 @@ VIEW_BUILDERS = {
     VIEW_CORRECTIONS: BedGui._build_corrections_view,
     VIEW_HISTORY: BedGui._build_history_view,
     VIEW_ICONS: BedGui._build_weather_icons_view,
+    VIEW_SECURE: BedGui._build_secure_view,
+    VIEW_WARNING: BedGui._build_warning_view,
 }
 
 

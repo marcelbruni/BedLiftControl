@@ -118,6 +118,7 @@ class TimeSync:
         self.adjust_system_clock = adjust_system_clock
         self.offset = timedelta(0)
         self.last_sync: datetime | None = None
+        self._failures = 0
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -136,9 +137,16 @@ class TimeSync:
     def refresh_once(self) -> bool:
         try:
             server, local_midpoint = fetch_internet_utc(self.url)
-        except Exception:  # network boundary: being offline is normal, never crash
-            logger.warning("Time sync failed, keeping the previous offset", exc_info=True)
+        except Exception as error:  # network boundary: being offline is normal
+            self._failures += 1
+            # the traceback once, a single line after that: this retries every fifteen
+            # seconds, and a day of stack traces rotates everything else out of the log
+            if self._failures == 1:
+                logger.warning("Time sync failed, keeping the previous offset", exc_info=True)
+            else:
+                logger.info("Time sync still failing (attempt %s): %s", self._failures, error)
             return False
+        self._failures = 0
         offset = server - local_midpoint
         with self._lock:
             self.offset = offset

@@ -35,6 +35,16 @@ Die App merkt sich die Bettposition **in Schritten**, nicht nur als oben/unten:
 > Updates, weil `git checkout` sie nicht anfasst. Anzusehen unter
 > ⚙ → „Historie".
 
+> **`data/bedliftcontrol.log`** ist das Log und steht ebenfalls nicht in git.
+> Dort landet alles, was die App meldet — auch Abstürze mit vollem Traceback,
+> die sonst im Nichts verschwinden, weil der Autostart kein Terminal hat.
+> Die Datei rotiert bei 1 MB und behält drei ältere Stände, maximal also 4 MB.
+>
+> ```bash
+> tail -f ~/BedLiftControl/data/bedliftcontrol.log     # live mitlesen
+> grep -E "ERROR|CRITICAL" ~/BedLiftControl/data/bedliftcontrol.log*
+> ```
+
 Wenn das Relais für den Wechselrichter noch nicht verdrahtet ist: das steht in
 [WIRING.md](WIRING.md) und ist unabhängig von dieser Anleitung.
 
@@ -281,7 +291,9 @@ danach also direkt im Vollbild.
 **Der einfache Weg ist der Knopf in den Einstellungen.** Dort steht unten die
 laufende Version (Commit und Datum) und daneben **„Install updates"**. Ein Druck
 darauf schaut auf GitHub nach und installiert gleich, falls etwas da ist; danach
-startet die App neu. Gibt es nichts, meldet er „Die Software ist aktuell."
+startet die App neu. Gibt es nichts, steht „Bereits aktuell" auf dem Knopf; geht
+etwas schief, „Fehlgeschlagen" — in beiden Fällen bleibt er dann ausgegraut, bis du
+die Einstellungen neu öffnest. Der Grund steht im Log.
 Die Bettposition bleibt erhalten — die App schreibt sie nach dem Pull aus dem
 Speicher zurück, das Bett muss also **nicht** vorher hochgefahren werden.
 
@@ -356,3 +368,4 @@ cp /tmp/config.bak data/config.json
 | „Install updates" meldet einen Fehler | Kein Internet, der Ordner ist kein git-Klon (dann fehlt `.git`, siehe Erstinstallation), oder andere getrackte Dateien sind lokal geändert — dann verweigert `git pull --ff-only`. Prüfen mit `cd ~/BedLiftControl && git fetch && git status`, über das Terminal aufräumen und erneut pullen. |
 | Version steht auf „unbekannt" | Der Ordner ist kein git-Klon. Update über den Knopf geht dann nicht, siehe Erstinstallation. |
 | Uhr zeigt eine falsche Zeit | Log prüfen: `Time synced, machine clock is off by …` zeigt die gemessene Abweichung. Fehlt die Zeile, war kein Internet da — dann läuft die Uhr mit der Maschinenzeit weiter, siehe Schritt 12. |
+| App startet nicht oder verschwindet | `grep -E "ERROR\|CRITICAL" ~/BedLiftControl/data/bedliftcontrol.log*` — Abstürze stehen dort mit Traceback. |

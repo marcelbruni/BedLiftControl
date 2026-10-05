@@ -1,7 +1,6 @@
 """Entry point: wire the config, controller and GUI together and run the app."""
 
-import logging
-
+from bedliftcontrol import logsetup
 from bedliftcontrol.config import Config
 from bedliftcontrol.controller import BedController
 from bedliftcontrol.gui import BedGui
@@ -13,10 +12,7 @@ from bedliftcontrol.weather import WeatherService
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
+    logsetup.configure()
     config = Config.load()
     history = History()
     controller = BedController(config, history)

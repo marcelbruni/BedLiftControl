@@ -41,6 +41,7 @@ BedLiftControl/
 │       ├── inverter.py      # 230V inverter, switched over its remote contact
 │       ├── main.py          # Entry point
 │       ├── connectivity.py  # Is there a line yet? A TCP connect, nothing more
+│       ├── logsetup.py      # Rotating log file plus the hooks that catch crashes
 │       ├── timesync.py      # Keeps the shown clock right when the Pi's is not
 │       ├── update.py        # Looks on GitHub and installs with git
 │       └── weather.py       # Location, forecast and the WMO code table
@@ -280,9 +281,11 @@ The settings and the corrections are deliberately no wider than the weather they
 Wider, and the centre area would grow and squeeze the arrow buttons every time a panel
 opened.
 
-Two things are still windows, because they are answers to an event rather than places
-to go: the "Sicherungsseile anbringen!" prompt at the top end stop, and the weather
-warning opened from a marked icon.
+Nothing opens a window any more. The "Sicherungsseile anbringen!" prompt at the top end
+stop and the weather warning behind a marked icon are panels like the rest; the prompt
+takes over from whatever was showing, because it matters more, and a movement started
+from it returns to the weather. Leaving the prompt is the acknowledgement that cuts
+mains. No system dialog is left anywhere - the update button writes its own answer.
 
 ## Tracking
 
@@ -321,7 +324,12 @@ and an **Install updates** button next to it. Nothing is checked in the backgrou
 looking and installing are one action, started by that button.
 
 It asks GitHub whether the checkout is behind its remote branch (`git fetch` plus
-`git rev-list --count HEAD..@{u}`). If it is not, it says so and stops. If it is, it
+`git rev-list --count HEAD..@{u}`). The answer goes on the button itself - "Bereits
+aktuell" or "Fehlgeschlagen" - and the button stays dead afterwards: there is nothing
+more to get, or something is wrong that pressing again will not mend. Leaving the
+settings rebuilds the panel, which is how to try again; why it failed is in the log,
+`data/bedliftcontrol.log`.
+If there is something to install, it
 discards the checked-in `data/config.json`, fast-forwards, writes the live config back
 and restarts the process with `os.execv`. Writing the config back is what keeps the bed
 position, the location and the delays across an update - without it, the pull would
@@ -330,6 +338,19 @@ reset them to the committed values.
 The button is refused while the bed is moving, and only the two git steps are run: the
 app is an editable install, so a pull is enough for code changes. A release that changes
 the dependencies still needs the terminal, see [DEPLOYMENT.md](DEPLOYMENT.md#update).
+
+## Logging
+
+Everything goes to `data/bedliftcontrol.log` as well as to the console, rotating at 1 MB
+with three older files kept - 4 MB at most on an SD card that also holds the system. The
+console half only helps on a development machine: the Pi starts the app from a desktop
+autostart entry with `Terminal=false`, so without the file a failure on the road leaves
+nothing to look at.
+
+Crashes do not go through logging on their own, so three hooks put them in the file too:
+`sys.excepthook`, `threading.excepthook`, and Tk's `report_callback_exception` - the last
+one matters most, because every timer tick and every button press of this app runs inside
+a Tk callback.
 
 ## Touch panel
 

@@ -29,3 +29,6 @@ data/weather.json
 
 # Night counter and location history, written at runtime
 data/history.json
+
+# Rotating log, written at runtime
+data/bedliftcontrol.log*

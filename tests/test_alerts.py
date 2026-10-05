@@ -111,9 +111,21 @@ class TestParsing:
         assert warning.area == "Bern"
         assert warning.link == "https://example.invalid/cap/2"
 
-    def test_a_broken_feed_raises_nothing_upstream(self, monkeypatch):
+    def test_a_broken_feed_says_it_could_not_find_out(self, monkeypatch):
+        """None, not an empty answer: otherwise a hiccup would clear real warnings."""
         monkeypatch.setattr(alerts, "_fetch", lambda url: b"<not xml")
-        assert alerts.fetch_warnings([Place("x", ("FR718",))]) == {"x": []}
+        assert alerts.fetch_warnings([Place("x", ("FR718",))]) is None
+
+    def test_one_readable_feed_is_enough_for_an_answer(self, monkeypatch):
+        """Half the countries unreachable still tells us about the other half."""
+        def half_dead(url):
+            if "france" in url:
+                return FEED.encode("utf-8")
+            raise OSError("no route to host")
+
+        monkeypatch.setattr(alerts, "_fetch", half_dead)
+        found = alerts.fetch_warnings([Place("chatel", ("FR718",))])
+        assert found is not None and found["chatel"]
 
 
 class TestMatching:
@@ -130,9 +142,15 @@ class TestMatching:
         found = alerts.fetch_warnings([Place("chatel", ("fr718", "HAUTE-SAVOIE"))])
         assert found["chatel"]
 
-    def test_a_place_without_regions_is_skipped(self, feeds):
-        """The phone position moves, so no region can be written down for it."""
-        assert alerts.fetch_warnings([Place("phone")]) == {}
+    def test_a_place_without_regions_gets_an_empty_answer(self, feeds):
+        """The phone position moves, so no region can be written down for it - but it
+        has to be in the answer, or a warning once put there would never go away."""
+        assert alerts.fetch_warnings([Place("phone")]) == {"phone": []}
+
+    def test_every_place_is_in_the_answer(self, feeds):
+        """The caller replaces its whole set with this one."""
+        places = [Place("chatel", ("FR718",)), Place("phone"), Place("lacure", ("FR432",))]
+        assert set(alerts.fetch_warnings(places)) == {"chatel", "phone", "lacure"}
 
     def test_other_regions_do_not_leak_in(self, feeds):
         found = alerts.fetch_warnings([Place("chatel", ("FR718",))])

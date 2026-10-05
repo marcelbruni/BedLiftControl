@@ -37,6 +37,19 @@ PROBE_INTERVAL_SECONDS = 15
 HTTP_TIMEOUT = 8
 
 
+def _log_repeated_failure(what: str, attempts: int, error) -> None:
+    """The traceback once, a single line after that.
+
+    A machine that is online while the API is down retries every fifteen seconds, and
+    a day of full stack traces fills the whole log with the same one - exactly when the
+    lines around it are the ones worth reading.
+    """
+    if attempts == 1:
+        logger.warning("%s failed", what, exc_info=True)
+    else:
+        logger.info("%s still failing (attempt %s): %s", what, attempts, error)
+
+
 @dataclass(frozen=True)
 class Location:
     key: str
@@ -297,6 +310,7 @@ class WeatherService:
         self.history = history
         self.readings: dict = {}
         self.warnings: dict = {}
+        self._failures = 0
         self._load_cache()
 
     @property
@@ -354,9 +368,11 @@ class WeatherService:
             return False
         try:
             readings = fetch_weather_batch(points)
-        except Exception:  # network boundary: a failed fetch must never crash the app
-            logger.warning("Weather refresh failed", exc_info=True)
+        except Exception as error:  # network boundary: a failed fetch must never crash
+            self._failures += 1
+            _log_repeated_failure("Weather refresh", self._failures, error)
             return False
+        self._failures = 0
         with self._lock:
             self.readings.update(dict(zip(keys, readings)))
         self._refresh_warnings()
@@ -369,12 +385,16 @@ class WeatherService:
 
         Kept apart from the readings: a warning feed that cannot be read must not cost
         us the weather, and the warnings we had stay on screen until better ones arrive.
+
+        Replaced wholesale rather than merged, so an expired warning really goes away.
+        None means the feeds could not be read at all, which is not the same as nothing
+        being in force - then the old set stays.
         """
         found = alerts.fetch_warnings(LOCATIONS)
-        if not found:
+        if found is None:
             return
         with self._lock:
-            self.warnings.update(found)
+            self.warnings = found
 
     def warnings_for(self, key: str) -> list:
         """Every warning in force for a location, worst first."""

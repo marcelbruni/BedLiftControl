@@ -210,30 +210,39 @@ def add_details(warning: WeatherWarning) -> bool:
     return True
 
 
-def fetch_warnings(locations) -> dict:
-    """Warnings per location key, for the locations that know their region.
+def fetch_warnings(locations):
+    """Warnings per location key, or None when not a single feed could be read.
 
-    Raises nothing: a country whose feed cannot be read simply contributes nothing, and
-    the caller keeps whatever it had.
+    Every location is a key of the answer, including the ones that know no region -
+    the caller replaces its whole set with this, so a warning that has expired, or one
+    left over from somewhere, disappears instead of lingering forever.
+
+    Raises nothing. None is the difference between "nothing is in force" and "we could
+    not find out", which is what lets the caller keep what it had over a hiccup.
     """
     wanted = {place.key: {region.lower() for region in place.regions}
               for place in locations if place.regions}
+    found = {place.key: [] for place in locations}
     if not wanted:
-        return {}
-    found = {key: [] for key in wanted}
+        return found
     unmatched = set()
+    reached = False
     for country, url in FEEDS.items():
         try:
             entries = parse_feed(_fetch(url))
         except Exception:
             logger.info("Could not read the %s warning feed", country, exc_info=True)
             continue
+        reached = True
         for keys, warning in entries:
             matched = [key for key, regions in wanted.items() if keys & regions]
             for key in matched:
                 found[key].append(warning)
             if not matched:
                 unmatched |= keys
+    if not reached:
+        logger.info("No warning feed could be read, keeping the warnings we have")
+        return None
     if unmatched:
         # the Swiss feed was empty while this was written, so its region identifiers
         # could not be verified - this line is how they show up the first time

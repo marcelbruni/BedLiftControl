@@ -300,3 +300,45 @@ class TestTheSyncLoop:
         monkeypatch.setattr(timesync_module.connectivity, "is_online", lambda: False)
         service._stop.set()
         service._loop()  # must return at once
+
+
+class TestRepeatedFailuresInTheLog:
+    """The clock retries every fifteen seconds while offline - the same trap."""
+
+    @staticmethod
+    def failing(monkeypatch):
+        def boom(_url):
+            raise OSError("no route to host")
+
+        monkeypatch.setattr(timesync_module, "fetch_internet_utc", boom)
+        return TimeSync(adjust_system_clock=False)
+
+    def test_the_first_failure_carries_the_traceback(self, monkeypatch, caplog):
+        service = self.failing(monkeypatch)
+        with caplog.at_level("INFO", logger="bedliftcontrol.timesync"):
+            service.refresh_once()
+        assert caplog.records[-1].levelname == "WARNING"
+        assert caplog.records[-1].exc_info is not None
+
+    def test_the_ones_after_it_are_a_single_line(self, monkeypatch, caplog):
+        service = self.failing(monkeypatch)
+        service.refresh_once()
+        with caplog.at_level("INFO", logger="bedliftcontrol.timesync"):
+            service.refresh_once()
+        assert caplog.records[-1].exc_info is None
+        assert "no route to host" in caplog.records[-1].getMessage()
+
+    def test_a_success_in_between_arms_it_again(self, monkeypatch, caplog):
+        from datetime import datetime, timezone
+
+        service = self.failing(monkeypatch)
+        service.refresh_once()
+        moment = datetime(2026, 10, 5, 10, 0, tzinfo=timezone.utc)
+        monkeypatch.setattr(timesync_module, "fetch_internet_utc",
+                            lambda _url: (moment, moment))
+        service.refresh_once()
+        monkeypatch.setattr(timesync_module, "fetch_internet_utc",
+                            lambda _url: (_ for _ in ()).throw(OSError("weg")))
+        with caplog.at_level("INFO", logger="bedliftcontrol.timesync"):
+            service.refresh_once()
+        assert caplog.records[-1].exc_info is not None
