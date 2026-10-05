@@ -72,6 +72,15 @@ class Config:
         return config
 
     def _validate(self) -> None:
+        # the travel first: the position is derived from it and clamped against it, so
+        # a broken total_steps would otherwise take the position down with it - a file
+        # saying "bed up" would come out of here reading "bed fully down"
+        if self.total_steps <= 0:
+            logger.warning("total_steps %s invalid, resetting to %s", self.total_steps, DEFAULT_TOTAL_STEPS)
+            self.total_steps = DEFAULT_TOTAL_STEPS
+        if self.speed_pps <= 0:
+            logger.warning("speed_pps %s invalid, resetting to %s", self.speed_pps, DEFAULT_SPEED_PPS)
+            self.speed_pps = DEFAULT_SPEED_PPS
         if self.position_steps < 0:
             # no stored position (fresh config, or one written before partial positions
             # existed): fall back to the coarse up/down flag
@@ -82,12 +91,6 @@ class Config:
                 self.position_steps, self.total_steps,
             )
             self.position_steps = self.total_steps
-        if self.total_steps <= 0:
-            logger.warning("total_steps %s invalid, resetting to %s", self.total_steps, DEFAULT_TOTAL_STEPS)
-            self.total_steps = DEFAULT_TOTAL_STEPS
-        if self.speed_pps <= 0:
-            logger.warning("speed_pps %s invalid, resetting to %s", self.speed_pps, DEFAULT_SPEED_PPS)
-            self.speed_pps = DEFAULT_SPEED_PPS
         self._clamp("rope_delay_seconds", ROPE_DELAY_MIN, ROPE_DELAY_MAX)
 
     def _clamp(self, name: str, low: float, high: float) -> None:
@@ -113,8 +116,15 @@ class Config:
         target = Path(self.path)
         temp = Path(str(target) + ".tmp")
         with self._lock:
-            # explicit encoding and line ending: this file is written on the Pi and
-            # on a Windows machine alike, and it is checked in - it must not flip
-            with open(temp, "w", encoding="utf-8", newline="\n") as handle:
-                handle.write(payload + "\n")
-            os.replace(temp, target)  # atomic on the same filesystem
+            try:
+                # explicit encoding and line ending: this file is written on the Pi and
+                # on a Windows machine alike, and it is checked in - it must not flip
+                with open(temp, "w", encoding="utf-8", newline="\n") as handle:
+                    handle.write(payload + "\n")
+                os.replace(temp, target)  # atomic on the same filesystem
+            except OSError as error:
+                # Seen in the wild: the sliders write this file on every event, and
+                # Windows refused the replace while something else still held the file.
+                # Losing one value is nothing against killing the callback that was
+                # writing it - the next save writes it again anyway.
+                logger.warning("Could not write the config %s (%s)", self.path, error)

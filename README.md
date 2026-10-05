@@ -352,6 +352,10 @@ Crashes do not go through logging on their own, so three hooks put them in the f
 one matters most, because every timer tick and every button press of this app runs inside
 a Tk callback.
 
+⚙ → "Log" shows the last 400 lines on the panel itself, scrolled to the end, so a failure
+on the road can be read without a terminal. Whole lines in their original order: a
+traceback is several of them and is unreadable rearranged or cut in the middle.
+
 ## Touch panel
 
 Two things the 7" panel needs that a desktop does not:

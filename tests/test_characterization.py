@@ -611,3 +611,43 @@ class TestConfigFileFormat:
         path = tmp_path / "config.json"
         Config(weather_location="höfen", path=str(path)).save()
         assert Config.load(str(path)).weather_location == "höfen"
+
+
+class TestAWriteThatCannotHappen:
+    """Seen in the wild: a slider writes this file on every scroll tick, Windows
+    refused the replace, and the exception killed the Tk callback that was writing it."""
+
+    def test_a_refused_write_does_not_raise(self, tmp_path, monkeypatch):
+        import os
+
+        config = Config(path=str(tmp_path / "config.json"))
+
+        def refuse(_source, _target):
+            raise PermissionError("Zugriff verweigert")
+
+        monkeypatch.setattr(os, "replace", refuse)
+        config.save()  # must not raise
+
+    def test_it_says_so_in_the_log(self, tmp_path, monkeypatch, caplog):
+        import os
+
+        config = Config(path=str(tmp_path / "config.json"))
+        monkeypatch.setattr(os, "replace",
+                            lambda *a: (_ for _ in ()).throw(PermissionError("nein")))
+        with caplog.at_level("WARNING", logger="bedliftcontrol.config"):
+            config.save()
+        assert "Could not write the config" in caplog.text
+
+    def test_the_next_save_still_works(self, tmp_path, monkeypatch):
+        """One lost value, not a dead writer."""
+        import os
+
+        path = tmp_path / "config.json"
+        config = Config(total_steps=29000, path=str(path))
+        real_replace = os.replace
+        monkeypatch.setattr(os, "replace",
+                            lambda *a: (_ for _ in ()).throw(PermissionError("nein")))
+        config.save()
+        monkeypatch.setattr(os, "replace", real_replace)
+        config.save()
+        assert Config.load(str(path)).total_steps == 29000

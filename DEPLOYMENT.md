@@ -40,6 +40,9 @@ Die App merkt sich die Bettposition **in Schritten**, nicht nur als oben/unten:
 > die sonst im Nichts verschwinden, weil der Autostart kein Terminal hat.
 > Die Datei rotiert bei 1 MB und behält drei ältere Stände, maximal also 4 MB.
 >
+> Die letzten 400 Zeilen stehen auch in der App unter ⚙ → „Log" — dafür
+> brauchst du kein Terminal. Am Rechner:
+>
 > ```bash
 > tail -f ~/BedLiftControl/data/bedliftcontrol.log     # live mitlesen
 > grep -E "ERROR|CRITICAL" ~/BedLiftControl/data/bedliftcontrol.log*
@@ -368,4 +371,4 @@ cp /tmp/config.bak data/config.json
 | „Install updates" meldet einen Fehler | Kein Internet, der Ordner ist kein git-Klon (dann fehlt `.git`, siehe Erstinstallation), oder andere getrackte Dateien sind lokal geändert — dann verweigert `git pull --ff-only`. Prüfen mit `cd ~/BedLiftControl && git fetch && git status`, über das Terminal aufräumen und erneut pullen. |
 | Version steht auf „unbekannt" | Der Ordner ist kein git-Klon. Update über den Knopf geht dann nicht, siehe Erstinstallation. |
 | Uhr zeigt eine falsche Zeit | Log prüfen: `Time synced, machine clock is off by …` zeigt die gemessene Abweichung. Fehlt die Zeile, war kein Internet da — dann läuft die Uhr mit der Maschinenzeit weiter, siehe Schritt 12. |
-| App startet nicht oder verschwindet | `grep -E "ERROR\|CRITICAL" ~/BedLiftControl/data/bedliftcontrol.log*` — Abstürze stehen dort mit Traceback. |
+| App startet nicht oder verschwindet | `grep -E "ERROR\|CRITICAL" ~/BedLiftControl/data/bedliftcontrol.log*` — Abstürze stehen dort mit Traceback. Läuft die App noch, geht es auch über ⚙ → „Log". |

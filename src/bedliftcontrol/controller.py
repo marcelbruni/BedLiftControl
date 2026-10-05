@@ -155,12 +155,9 @@ class BedController:
         return target * cls._ramp_factor(progress)
 
     def change_direction(self, direction: int) -> None:
-        if direction > 0:
-            GPIO.output(Pins.FRONT_DIR.value, Direction.DOWN.value)
-            GPIO.output(Pins.BACK_DIR.value, Direction.DOWN.value)
-        else:
-            GPIO.output(Pins.FRONT_DIR.value, Direction.UP.value)
-            GPIO.output(Pins.BACK_DIR.value, Direction.UP.value)
+        """`direction` is the level the DIR pins carry, so it goes out as it came in."""
+        GPIO.output(Pins.FRONT_DIR.value, direction)
+        GPIO.output(Pins.BACK_DIR.value, direction)
 
     def move_step(self, sleeptime: float) -> None:
         GPIO.output(Pins.FRONT_PUL.value, 1)

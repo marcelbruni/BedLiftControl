@@ -12,6 +12,7 @@ import logging
 import logging.handlers
 import sys
 import threading
+from collections import deque
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,9 @@ LOG_FILE = str(Path(__file__).resolve().parents[2] / "data" / "bedliftcontrol.lo
 MAX_BYTES = 1_000_000
 BACKUP_COUNT = 3
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
+# what the panel shows: a few hours of a quiet machine, and enough of a noisy
+# one to see what led up to the last entry
+TAIL_LINES = 400
 
 
 def configure(path: str = LOG_FILE, level: int = logging.INFO) -> None:
@@ -50,6 +54,21 @@ def _log_thread_exception(args) -> None:
         return
     logger.critical("Unhandled exception in thread %s", args.thread.name if args.thread else "?",
                     exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+
+
+def read_tail(path: str = LOG_FILE, lines: int = TAIL_LINES) -> str:
+    """The last `lines` of the log, for showing it on the panel.
+
+    Whole lines and in order: a traceback is several of them and is unreadable
+    rearranged or cut in the middle.
+    """
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            kept = deque(handle, maxlen=lines)
+    except OSError as error:
+        logger.info("Could not read the log %s (%s)", path, error)
+        return ""
+    return "".join(kept).rstrip()
 
 
 def log_callback_exception(kind, value, traceback) -> None:

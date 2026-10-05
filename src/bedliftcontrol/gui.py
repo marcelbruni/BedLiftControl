@@ -70,6 +70,7 @@ BAR_FONT_SIZE = 18  # the glyphs and labels are read from arm's length
 LOCATION_MENU_WIDTH = 250  # same width as the sliders above it, see SETTINGS_SLIDER_WIDTH
 KIOSK_BUTTON_WIDTH = 190   # the longest label of the three, side by side in one row
 SETTINGS_BUTTON_WIDTH = 120
+LOG_BUTTON_WIDTH = 70  # one short word; the button row above is already full
 # narrow enough that the settings panel is no wider than the weather it replaces -
 # otherwise the centre area grows and the arrow buttons shrink under the finger
 SETTINGS_SLIDER_WIDTH = 250
@@ -92,6 +93,8 @@ UPDATE_UP_TO_DATE_TEXT = "Bereits aktuell"
 UPDATE_FAILED_TEXT = "Fehlgeschlagen"
 UPDATE_BUTTON_WIDTH = 160
 SECURE_FONT_SIZE = 26  # the one line on the panel, read from across the van
+LOG_FONT_SIZE = 11     # small, because a log line is long and the panel is narrow
+LOG_FONT_FAMILY = "Courier New"  # the timestamps line up only in a fixed pitch
 SECURE_OK_WIDTH = 220
 SECURE_OK_HEIGHT = 56  # a finger reaching past the bed, not a mouse pointer
 
@@ -146,6 +149,7 @@ VIEW_SETTINGS = "settings"
 VIEW_CORRECTIONS = "corrections"
 VIEW_HISTORY = "history"
 VIEW_ICONS = "icons"
+VIEW_LOG = "log"
 VIEW_SECURE = "secure"
 VIEW_WARNING = "warning"
 # Where the back button leads from each panel. The weather is the ground floor and has
@@ -155,6 +159,7 @@ BACK_TARGET = {
     VIEW_CORRECTIONS: VIEW_WEATHER,
     VIEW_HISTORY: VIEW_SETTINGS,
     VIEW_ICONS: VIEW_SETTINGS,
+    VIEW_LOG: VIEW_SETTINGS,
     VIEW_SECURE: VIEW_WEATHER,
     VIEW_WARNING: VIEW_WEATHER,
 }
@@ -672,8 +677,8 @@ class BedGui:
         self._build_version_row(content, row=5)
 
     def _build_version_row(self, parent, row: int) -> None:
-        """What is running, next to the only way to change it. Same width as the button
-        row above it, so both edges line up."""
+        """The maintenance line: what is running, what it wrote down, and the way to a
+        newer one. Same width as the button row above it, so both edges line up."""
         line = ctk.CTkFrame(parent, fg_color="transparent", width=SETTINGS_ROW_WIDTH,
                             height=VERSION_ROW_HEIGHT)
         line.grid(row=row, column=0, columnspan=3, padx=12, pady=(16, 0))
@@ -685,6 +690,8 @@ class BedGui:
                                             width=UPDATE_BUTTON_WIDTH,
                                             command=self._on_update, hover=False)
         self._update_button.pack(side="right")
+        ctk.CTkButton(line, text="Log", width=LOG_BUTTON_WIDTH,
+                      command=self._show_log, hover=False).pack(side="right", padx=(0, 8))
 
     @staticmethod
     def _add_slider_row(parent, row, label, low, high, value, command, value_text, steps=None):
@@ -707,7 +714,7 @@ class BedGui:
         vehicle can lose power between two taps."""
         setattr(self.controller.config, name, value)
         self.controller.config.save()
-        if label is not None:  # the settings window may be closed again by now
+        if label is not None:  # the settings panel may be gone again by now
             label.configure(text=text)
 
     def _on_rope_delay_change(self, value) -> None:
@@ -809,6 +816,25 @@ class BedGui:
 
     def _show_weather_icons(self) -> None:
         self._show_view(VIEW_ICONS)
+
+    def _show_log(self) -> None:
+        self._show_view(VIEW_LOG)
+
+    def _build_log_view(self) -> None:
+        """The tail of the log file, so a failure on the road can be read on the spot.
+
+        A textbox rather than a frame of labels: it brings its own scrollbar, four
+        hundred labels would not, and it can be scrolled to the end.
+        """
+        box = ctk.CTkTextbox(self.panel_view, wrap="none", activate_scrollbars=True,
+                             font=ctk.CTkFont(family=LOG_FONT_FAMILY, size=LOG_FONT_SIZE))
+        box.pack(fill="both", expand=True)
+        box.insert("0.0", logsetup.read_tail() or "Das Log ist noch leer.")
+        box.see("end")  # the newest line is the one that is being looked for
+        # see() moves both axes, and the last line is usually a long one - without this
+        # the panel opens scrolled past the timestamps, showing the ends of lines
+        box.xview_moveto(0)
+        box.configure(state="disabled")  # a log is read, not written
 
     def _build_weather_icons_view(self) -> None:
         """Reference list of every WMO code with its icon.
@@ -1003,6 +1029,10 @@ class BedGui:
         weather_row.pack(pady=6, padx=(40, 0))  # left pad shifts the centred group ~20px right
         self.weather_icon = icons.IconCanvas(weather_row, size=WEATHER_ICON_SIZE, background=_panel_background())
         self.weather_icon.pack(side="left", padx=(0, 20))
+        # the day is read when the tap happens, not when the binding is made: this
+        # widget outlives every midnight
+        self.weather_icon.bind("<Button-1>",
+                               lambda _event: self._show_warning(self._today()))
         self.weather_temp = ctk.CTkLabel(weather_row, text="", font=ctk.CTkFont(size=52))
         self.weather_temp.pack(side="left", padx=(20, 0))
         self.weather_desc = ctk.CTkLabel(self.current_frame, text="", font=ctk.CTkFont(size=16))
@@ -1016,7 +1046,7 @@ class BedGui:
         """
         self.weather_city.configure(text=city)
         self.weather_day.configure(text=day.day)
-        self.weather_icon.show(day.icon)
+        self.weather_icon.show(day.icon, self._warning_color(day.date))
         self.weather_temp.configure(text=f"{round(day.temp_max)}° / {round(day.temp_min)}°")
         self.weather_desc.configure(text=day.description)
 
@@ -1084,6 +1114,7 @@ VIEW_BUILDERS = {
     VIEW_CORRECTIONS: BedGui._build_corrections_view,
     VIEW_HISTORY: BedGui._build_history_view,
     VIEW_ICONS: BedGui._build_weather_icons_view,
+    VIEW_LOG: BedGui._build_log_view,
     VIEW_SECURE: BedGui._build_secure_view,
     VIEW_WARNING: BedGui._build_warning_view,
 }

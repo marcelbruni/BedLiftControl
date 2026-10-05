@@ -29,6 +29,7 @@ WIDGETS = [
     "CTkToplevel",
     "CTkSlider",
     "CTkOptionMenu",
+    "CTkTextbox",
     "CTkFont",
 ]
 
@@ -1791,6 +1792,144 @@ class TestCountdownRedraws:
         for second in (3, 3, 2, 2, 1, 1):
             gui._set_stop_button_text(gui._countdown_text(second), gui._countdown_font)
         assert gui.stop_button.configure.call_count == 3
+
+
+class TestLogPanel:
+    """The log is the only thing that says why an update failed, so it has to be
+    readable on the machine itself."""
+
+    @staticmethod
+    def capture_box(monkeypatch, text):
+        """The widget mocks hand out a fresh object per call, so the box has to be
+        caught on the way out."""
+        import customtkinter
+
+        made = []
+
+        def build(*args, **kwargs):
+            made.append(_widget_mock())
+            return made[-1]
+
+        monkeypatch.setattr(gui_module.logsetup, "read_tail", lambda *a, **k: text)
+        customtkinter.CTkTextbox.side_effect = build
+        return made
+
+    @pytest.fixture
+    def opened(self, gui, monkeypatch):
+        boxes = self.capture_box(monkeypatch, "erste Zeile\nletzte Zeile")
+        gui._show_log()
+        assert boxes, "no textbox was built"
+        return gui, boxes[0]
+
+    def test_the_settings_offer_it(self, gui):
+        import customtkinter
+
+        customtkinter.CTkButton.reset_mock()
+        gui._show_view(gui_module.VIEW_SETTINGS)
+        texts = [c.kwargs.get("text") for c in customtkinter.CTkButton.call_args_list]
+        assert "Log" in texts
+
+    def test_it_opens_in_the_centre_area(self, opened):
+        gui, _ = opened
+        assert gui._view == gui_module.VIEW_LOG
+
+    def test_it_shows_the_file(self, opened):
+        _, box = opened
+        written = [c.args[1] for c in box.insert.call_args_list if len(c.args) > 1]
+        assert any("letzte Zeile" in text for text in written)
+
+    def test_it_scrolls(self, opened):
+        """Four hundred lines do not fit any panel."""
+        import customtkinter
+
+        assert customtkinter.CTkTextbox.call_args.kwargs.get("activate_scrollbars") is True
+
+    def test_it_opens_at_the_end(self, opened):
+        """The newest line is the one being looked for."""
+        _, box = opened
+        box.see.assert_called_with("end")
+
+    def test_it_opens_at_the_left_edge(self, opened):
+        """see() moves both axes; without this the panel opens past the timestamps."""
+        _, box = opened
+        box.xview_moveto.assert_called_with(0)
+
+    def test_it_cannot_be_typed_into(self, opened):
+        _, box = opened
+        states = [c.kwargs.get("state") for c in box.configure.call_args_list]
+        assert "disabled" in states
+
+    def test_an_empty_log_says_so(self, gui, monkeypatch):
+        boxes = self.capture_box(monkeypatch, "")
+        gui._show_log()
+        written = [c.args[1] for c in boxes[0].insert.call_args_list if len(c.args) > 1]
+        assert any("leer" in text for text in written)
+
+    def test_the_back_button_leads_to_the_settings(self, opened):
+        gui, _ = opened
+        gui._go_back()
+        assert gui._view == gui_module.VIEW_SETTINGS
+
+
+class TestTodaysWarningIsReachable:
+    """The marker on the big icon was drawn but could not be pressed - the binding
+    only ever went on the forecast columns."""
+
+    @pytest.fixture
+    def built(self, controller, weather, monkeypatch):
+        """IconCanvas is a real Tk widget, so it has to be replaced to see the binding."""
+        monkeypatch.setattr(gui_module.icons, "IconCanvas",
+                            lambda master, size, background: MagicMock())
+        return BedGui(controller, weather)
+
+    @staticmethod
+    def handler(built):
+        bindings = [c for c in built.weather_icon.bind.call_args_list
+                    if c.args and c.args[0] == "<Button-1>"]
+        assert bindings, "the big icon is not bound"
+        return bindings[0].args[1]
+
+    def test_the_big_icon_is_bound(self, built):
+        assert self.handler(built)
+
+    def test_pressing_it_opens_todays_warning(self, built, weather, monkeypatch):
+        from bedliftcontrol.alerts import WeatherWarning
+
+        monkeypatch.setattr(gui_module.BedGui, "_today", lambda self: FIXED_TODAY)
+        weather.warning_on.return_value = WeatherWarning(
+            "Sturm", "Severe", "Bern", f"{FIXED_TODAY}T12:00:00+00:00",
+            f"{FIXED_TODAY}T20:00:00+00:00")
+        self.handler(built)(None)
+        assert built._view == gui_module.VIEW_WARNING
+
+    def test_a_quiet_day_opens_nothing(self, built, weather, monkeypatch):
+        monkeypatch.setattr(gui_module.BedGui, "_today", lambda self: FIXED_TODAY)
+        weather.warning_on.return_value = None
+        self.handler(built)(None)
+        assert built._view == gui_module.VIEW_WEATHER
+
+    def test_the_day_is_read_when_it_is_pressed(self, built, monkeypatch):
+        """The icon outlives every midnight, so the date must not be baked in."""
+        asked = []
+        monkeypatch.setattr(gui_module.BedGui, "_show_warning",
+                            lambda self, day: asked.append(day))
+        monkeypatch.setattr(gui_module.BedGui, "_today", lambda self: "2026-12-24")
+        self.handler(built)(None)
+        assert asked == ["2026-12-24"]
+
+    def test_the_marker_survives_a_stale_reading(self, built, weather):
+        """Offline is when a warning matters most - it must not vanish with the
+        fallback to today's forecast."""
+        from bedliftcontrol.alerts import WeatherWarning
+        from bedliftcontrol.weather import DailyForecast
+
+        warning = WeatherWarning("Sturm", "Severe", "Bern",
+                                 f"{FIXED_TODAY}T12:00:00+00:00",
+                                 f"{FIXED_TODAY}T20:00:00+00:00")
+        weather.warning_on.side_effect = lambda key, day: warning if day == FIXED_TODAY else None
+        day = DailyForecast("Do", FIXED_TODAY, "sun", 20.0, 9.0, 10, "Klar")
+        built._update_current_panel_from_forecast("Thun", day)
+        built.weather_icon.show.assert_called_with("sun", warning.color)
 
 
 class TestBackButton:

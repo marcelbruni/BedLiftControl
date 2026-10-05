@@ -124,3 +124,34 @@ class TestCrashes:
 
         parameters = inspect.signature(logsetup.log_callback_exception).parameters
         assert len(parameters) == 3
+
+
+class TestReadingItBack:
+    """What the panel shows."""
+
+    def test_it_returns_the_last_lines(self, log_file):
+        for number in range(10):
+            logging.getLogger("bedliftcontrol.test").info("Zeile %s", number)
+        tail = logsetup.read_tail(str(log_file), lines=3)
+        assert len(tail.splitlines()) == 3
+        assert "Zeile 9" in tail and "Zeile 6" not in tail
+
+    def test_the_order_is_kept(self, log_file):
+        """A traceback is several lines and is unreadable rearranged."""
+        for number in range(4):
+            logging.getLogger("bedliftcontrol.test").info("Zeile %s", number)
+        lines = logsetup.read_tail(str(log_file)).splitlines()
+        assert lines == sorted(lines, key=lambda line: int(line.rsplit(" ", 1)[1]))
+
+    def test_a_short_log_comes_back_whole(self, log_file):
+        logging.getLogger("bedliftcontrol.test").info("alles")
+        assert "alles" in logsetup.read_tail(str(log_file), lines=400)
+
+    def test_a_missing_file_is_not_an_error(self, tmp_path):
+        assert logsetup.read_tail(str(tmp_path / "never_written.log")) == ""
+
+    def test_a_broken_byte_does_not_stop_it(self, tmp_path):
+        """The file is written while the power can drop; half a character is possible."""
+        path = tmp_path / "broken.log"
+        path.write_bytes("gut\n".encode("utf-8") + b"\xff\xfe kaputt\n")
+        assert "gut" in logsetup.read_tail(str(path))

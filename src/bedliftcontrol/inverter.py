@@ -74,5 +74,8 @@ class Inverter:
 
     def toggle(self) -> bool:
         """Returns the state it is in afterwards."""
-        self.turn_off() if self._on else self.turn_on()
+        if self._on:
+            self.turn_off()
+        else:
+            self.turn_on()
         return self._on

@@ -7,7 +7,7 @@ monochrome and falls back to a tofu box wherever the installed font has no outli
 which differs between Windows (Segoe UI Emoji) and the Raspberry Pi (Noto Color Emoji).
 
 So the icons are drawn instead. Every icon is composed from parts placed in a 0..1 unit
-square and scaled to the requested pixel size, which lets one definition serve the 52px
+square and scaled to the requested pixel size, which lets one definition serve the 64px
 panel icon, the 34px forecast icon and the 26px reference table alike.
 """
 

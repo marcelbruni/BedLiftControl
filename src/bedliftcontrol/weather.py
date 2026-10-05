@@ -359,8 +359,13 @@ class WeatherService:
             }
         target = Path(self.path)
         temp = Path(str(target) + ".tmp")
-        temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(temp, target)
+        try:
+            temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(temp, target)
+        except OSError as error:
+            # this runs in the refresh thread; letting it out would end the thread and
+            # with it the weather, over a cache that is a convenience either way
+            logger.warning("Could not write the weather cache %s (%s)", self.path, error)
 
     def refresh_once(self) -> bool:
         keys, points = self._request_points()
